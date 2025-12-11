@@ -1,0 +1,6 @@
+[submodule "crengine-ng"]
+	path = crengine-ng
+	url = https://github.com/CrazyCoder/crengine-ng.git
+[submodule "crqt-ng"]
+	path = crqt-ng
+	url = https://github.com/CrazyCoder/crqt-ng.git
