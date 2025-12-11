@@ -17,12 +17,15 @@ add_subdirectory(crengine-ng)
 # Create namespaced aliases that crqt-ng expects (matching find_package exports)
 # These need PUBLIC include directories for the umbrella build to work
 if(TARGET crengine-ng)
-    # Get the source include directory
+    # Get the source and binary include directories
     set(CRENGINE_NG_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/crengine-ng/crengine/include")
+    set(CRENGINE_NG_BINARY_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/crengine-ng/crengine")
 
     # Add PUBLIC include directories to the existing targets
+    # Include both source dir (headers) and binary dir (generated crengine-ng-config.h)
     target_include_directories(crengine-ng PUBLIC
         $<BUILD_INTERFACE:${CRENGINE_NG_INCLUDE_DIR}>
+        $<BUILD_INTERFACE:${CRENGINE_NG_BINARY_INCLUDE_DIR}>
     )
 
     # Create namespaced alias
@@ -32,6 +35,7 @@ endif()
 if(TARGET crengine-ng_static)
     target_include_directories(crengine-ng_static PUBLIC
         $<BUILD_INTERFACE:${CRENGINE_NG_INCLUDE_DIR}>
+        $<BUILD_INTERFACE:${CRENGINE_NG_BINARY_INCLUDE_DIR}>
     )
     add_library(crengine-ng::crengine-ng_static ALIAS crengine-ng_static)
 endif()
