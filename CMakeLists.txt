@@ -7,6 +7,10 @@ set_property(CACHE USE_QT PROPERTY STRINGS QT5 QT6)
 
 option(STATIC_CRENGINE_NG "Link with the static version of crengine-ng" OFF)
 
+# crengine-ng specific options for cr2xt converter
+set(USE_COLOR_BACKBUFFER OFF CACHE BOOL "Use color backbuffer")
+set(GRAY_BACKBUFFER_BITS 2 CACHE STRING "Gray depth for gray backbuffer")
+
 # Build crengine-ng first (the dependency)
 add_subdirectory(crengine-ng)
 
