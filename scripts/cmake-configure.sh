@@ -2,6 +2,10 @@
 # Sourced by build-dist-windows.ps1
 # Arguments: PROJECT_ROOT BUILD_DIR INSTALL_PREFIX
 
+# Force colored output (CMake/Ninja/GCC don't detect TTY through Start-Process)
+export CLICOLOR_FORCE=1
+export CMAKE_COLOR_DIAGNOSTICS=ON
+
 PROJECT_ROOT="$1"
 BUILD_DIR="$2"
 INSTALL_PREFIX="$3"

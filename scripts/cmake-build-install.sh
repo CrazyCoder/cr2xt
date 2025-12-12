@@ -2,6 +2,10 @@
 # Sourced by build-dist-windows.ps1
 # Arguments: BUILD_DIR JOBS
 
+# Force colored output (CMake/Ninja/GCC don't detect TTY through Start-Process)
+export CLICOLOR_FORCE=1
+export CMAKE_COLOR_DIAGNOSTICS=ON
+
 BUILD_DIR="$1"
 JOBS="${2:-4}"
 

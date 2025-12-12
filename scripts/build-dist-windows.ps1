@@ -220,6 +220,10 @@ Write-Host "Version: $Version" -ForegroundColor Green
 
 # Run CMake build and install if requested
 if ($Build) {
+    # Disable progress bar to prevent overlap with build output
+    $oldProgressPreference = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+
     Write-Host "`n=== Building project ===" -ForegroundColor Cyan
 
     # Default build directory
@@ -341,6 +345,9 @@ source "$buildInstallScriptUnix" "$BuildDirUnix" "$Jobs"
 
     # Clean up temp script
     Remove-Item -Path $tempScript -Force -ErrorAction SilentlyContinue
+
+    # Restore progress preference
+    $ProgressPreference = $oldProgressPreference
 
     if ($process.ExitCode -ne 0) {
         Write-Error "Build failed with exit code $($process.ExitCode)"
