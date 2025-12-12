@@ -33,11 +33,28 @@
 .PARAMETER No7z
     Skip creating the 7z archive (only creates ZIP)
 
+.PARAMETER Build
+    Run CMake build and install before packaging. Uses release configuration
+    with -DCON_DEBUG:BOOL=OFF to produce Windows binary without console.
+
+.PARAMETER CleanBuild
+    Remove build directory before building (forces full rebuild)
+
+.PARAMETER BuildDir
+    CMake build directory (default: ..\build\release)
+
+.PARAMETER Jobs
+    Number of parallel build jobs (default: number of processors)
+
+.PARAMETER Msys2Root
+    Path to MSYS2 installation (default: C:\tools\msys64)
+
 .EXAMPLE
     .\build-dist-windows.ps1
     .\build-dist-windows.ps1 -SourceDir "C:\MyApp" -DistDir ".\output"
     .\build-dist-windows.ps1 -Clean -NoZip
     .\build-dist-windows.ps1 -SkipWinDeployQt
+    .\build-dist-windows.ps1 -Build -CleanDlls -Clean
 #>
 
 param(
@@ -48,7 +65,12 @@ param(
     [switch]$SkipWinDeployQt,
     [switch]$CleanDlls,
     [switch]$SkipMingwDlls,
-    [switch]$No7z
+    [switch]$No7z,
+    [switch]$Build,
+    [switch]$CleanBuild,
+    [string]$BuildDir = "",
+    [int]$Jobs = 0,
+    [string]$Msys2Root = "C:\tools\msys64"
 )
 
 Set-StrictMode -Version Latest
@@ -100,12 +122,10 @@ function Find-Python {
 
     # Try common MinGW/MSYS2 locations
     $pythonPaths = @(
+        "$Msys2Root\mingw64\bin\python3.exe",
+        "$Msys2Root\mingw64\bin\python.exe",
         "$env:MSYSTEM_PREFIX\bin\python3.exe",
         "$env:MSYSTEM_PREFIX\bin\python.exe",
-        "C:\tools\msys64\mingw64\bin\python3.exe",
-        "C:\tools\msys64\mingw64\bin\python.exe",
-        "C:\msys64\mingw64\bin\python3.exe",
-        "C:\msys64\mingw64\bin\python.exe",
         "C:\Python312\python.exe",
         "C:\Python313\python.exe",
         "C:\Python314\python.exe"
@@ -130,9 +150,8 @@ function Find-WinDeployQt {
 
     # Try common MinGW locations
     $mingwPaths = @(
-        "$env:MSYSTEM_PREFIX\bin\windeployqt6.exe",
-        "C:\tools\msys64\mingw64\bin\windeployqt6.exe",
-        "C:\msys64\mingw64\bin\windeployqt6.exe"
+        "$Msys2Root\mingw64\bin\windeployqt6.exe",
+        "$env:MSYSTEM_PREFIX\bin\windeployqt6.exe"
     )
 
     foreach ($path in $mingwPaths) {
@@ -162,9 +181,8 @@ function Find-7za {
     $paths = @(
         "$env:ProgramFiles\7-Zip\7z.exe",
         "${env:ProgramFiles(x86)}\7-Zip\7z.exe",
-        "$env:MSYSTEM_PREFIX\bin\7za.exe",
-        "C:\tools\msys64\mingw64\bin\7za.exe",
-        "C:\msys64\mingw64\bin\7za.exe"
+        "$Msys2Root\mingw64\bin\7za.exe",
+        "$env:MSYSTEM_PREFIX\bin\7za.exe"
     )
 
     foreach ($path in $paths) {
@@ -199,6 +217,136 @@ function Get-GitVersion {
 
 $Version = Get-GitVersion
 Write-Host "Version: $Version" -ForegroundColor Green
+
+# Run CMake build and install if requested
+if ($Build) {
+    Write-Host "`n=== Building project ===" -ForegroundColor Cyan
+
+    # Default build directory
+    if ([string]::IsNullOrEmpty($BuildDir)) {
+        $BuildDir = Join-Path $ProjectRoot "build\release"
+    }
+
+    # Resolve SourceDir to absolute path for install prefix
+    $SourceDirAbs = (Resolve-Path $SourceDir -ErrorAction SilentlyContinue)
+    if (-not $SourceDirAbs) {
+        # SourceDir doesn't exist yet, construct absolute path
+        $SourceDirAbs = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $SourceDir))
+    }
+    else {
+        $SourceDirAbs = $SourceDirAbs.Path
+    }
+
+    # Default to number of processors
+    if ($Jobs -le 0) {
+        $Jobs = $env:NUMBER_OF_PROCESSORS
+        if (-not $Jobs) { $Jobs = 4 }
+    }
+
+    # Validate MSYS2 installation
+    if (-not (Test-Path (Join-Path $Msys2Root "msys2_shell.cmd"))) {
+        Write-Error "MSYS2 installation not found at: $Msys2Root"
+        exit 1
+    }
+
+    Write-Host "MSYS2: $Msys2Root" -ForegroundColor Gray
+    Write-Host "Build directory: $BuildDir" -ForegroundColor Gray
+    Write-Host "Install prefix: $SourceDirAbs" -ForegroundColor Gray
+    Write-Host "Jobs: $Jobs" -ForegroundColor Gray
+
+    # Clean build directory if requested
+    if ($CleanBuild -and (Test-Path $BuildDir)) {
+        Write-Host "`nCleaning build directory..." -ForegroundColor Yellow
+        Remove-Item -Path $BuildDir -Recurse -Force
+    }
+
+    # Create build directory if it doesn't exist
+    if (-not (Test-Path $BuildDir)) {
+        New-Item -Path $BuildDir -ItemType Directory -Force | Out-Null
+    }
+
+    # Convert Windows paths to Unix-style for MSYS2
+    function ConvertTo-UnixPath($winPath) {
+        $p = $winPath -replace '\\', '/'
+        if ($p -match '^([A-Za-z]):(.*)$') {
+            return "/$($Matches[1].ToLower())$($Matches[2])"
+        }
+        return $p
+    }
+
+    $ProjectRootUnix = ConvertTo-UnixPath $ProjectRoot
+    $BuildDirUnix = ConvertTo-UnixPath $BuildDir
+    $InstallPrefixUnix = ConvertTo-UnixPath $SourceDirAbs
+
+    # Check if configure is needed
+    $needsConfigure = -not (Test-Path (Join-Path $BuildDir "CMakeCache.txt"))
+
+    # Build script to run in MSYS2
+    if ($needsConfigure) {
+        $buildScript = @"
+set -e
+echo "=== Configuring ==="
+cmake -S "$ProjectRootUnix" -B "$BuildDirUnix" -G "Ninja" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCON_DEBUG:BOOL=OFF \
+    "-DCMAKE_INSTALL_PREFIX:PATH=$InstallPrefixUnix"
+
+echo "=== Building ==="
+cmake --build "$BuildDirUnix" --target all -j $Jobs
+
+echo "=== Installing ==="
+cmake --build "$BuildDirUnix" --target install -j $Jobs
+
+echo "=== Build completed successfully ==="
+"@
+    }
+    else {
+        Write-Host "Build directory already configured, skipping configure step" -ForegroundColor Gray
+        $buildScript = @"
+set -e
+echo "=== Building ==="
+cmake --build "$BuildDirUnix" --target all -j $Jobs
+
+echo "=== Installing ==="
+cmake --build "$BuildDirUnix" --target install -j $Jobs
+
+echo "=== Build completed successfully ==="
+"@
+    }
+
+    # Write build script to temp file
+    $tempScript = Join-Path $env:TEMP "cr2xt-build.sh"
+    # Write with Unix line endings
+    $buildScript -replace "`r`n", "`n" | Set-Content -Path $tempScript -Encoding utf8 -NoNewline
+
+    # Convert temp script path to Unix format for bash
+    $tempScriptUnix = ConvertTo-UnixPath $tempScript
+
+    # Run build using MinGW64 bash directly with proper environment
+    Write-Host "`nRunning build in MinGW64 environment..." -ForegroundColor Yellow
+
+    # Set up MinGW64 environment variables
+    $mingwBin = Join-Path $Msys2Root "mingw64\bin"
+    $usrBin = Join-Path $Msys2Root "usr\bin"
+    $env:PATH = "$mingwBin;$usrBin;$env:PATH"
+    $env:MSYSTEM = "MINGW64"
+    $env:MSYSTEM_PREFIX = "/mingw64"
+    $env:MINGW_PREFIX = "/mingw64"
+
+    # Run bash directly
+    $bash = Join-Path $usrBin "bash.exe"
+    $process = Start-Process -FilePath $bash -ArgumentList "-l", $tempScriptUnix -NoNewWindow -Wait -PassThru
+
+    # Clean up temp script
+    Remove-Item -Path $tempScript -Force -ErrorAction SilentlyContinue
+
+    if ($process.ExitCode -ne 0) {
+        Write-Error "Build failed with exit code $($process.ExitCode)"
+        exit 1
+    }
+
+    Write-Host "Build and install completed successfully" -ForegroundColor Green
+}
 
 # Clean DLLs from source directory if requested (before windeployqt6)
 if ($CleanDlls) {
@@ -263,6 +411,12 @@ if (-not $SkipMingwDlls) {
         else {
             Write-Host "Using Python: $python" -ForegroundColor Gray
             Write-Host "Script: $bundledllsScript" -ForegroundColor Gray
+
+            # Set search path for mingw-bundledlls (mingw64/bin and mingw64/lib)
+            $mingwBin = Join-Path $Msys2Root "mingw64\bin"
+            $mingwLib = Join-Path $Msys2Root "mingw64\lib"
+            $env:MINGW_BUNDLEDLLS_SEARCH_PATH = "$mingwBin;$mingwLib"
+            Write-Host "Search path: $env:MINGW_BUNDLEDLLS_SEARCH_PATH" -ForegroundColor Gray
 
             # Run mingw-bundledlls to get list of dependencies
             try {
