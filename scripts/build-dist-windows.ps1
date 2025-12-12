@@ -281,43 +281,45 @@ if ($Build) {
     # Check if configure is needed
     $needsConfigure = -not (Test-Path (Join-Path $BuildDir "CMakeCache.txt"))
 
-    # Build script to run in MSYS2
+    # Locate external build scripts
+    $configureScriptPath = Join-Path $ScriptDir "cmake-configure.sh"
+    $buildInstallScriptPath = Join-Path $ScriptDir "cmake-build-install.sh"
+
+    if (-not (Test-Path $configureScriptPath)) {
+        Write-Error "Configure script not found: $configureScriptPath"
+        exit 1
+    }
+    if (-not (Test-Path $buildInstallScriptPath)) {
+        Write-Error "Build script not found: $buildInstallScriptPath"
+        exit 1
+    }
+
+    $configureScriptUnix = ConvertTo-UnixPath $configureScriptPath
+    $buildInstallScriptUnix = ConvertTo-UnixPath $buildInstallScriptPath
+
+    # Build combined script that sources external scripts with arguments
     if ($needsConfigure) {
         $buildScript = @"
+#!/bin/bash
 set -e
-echo "=== Configuring ==="
-cmake -S "$ProjectRootUnix" -B "$BuildDirUnix" -G "Ninja" \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCON_DEBUG:BOOL=OFF \
-    "-DCMAKE_INSTALL_PREFIX:PATH=$InstallPrefixUnix"
-
-echo "=== Building ==="
-cmake --build "$BuildDirUnix" --target all -j $Jobs
-
-echo "=== Installing ==="
-cmake --build "$BuildDirUnix" --target install -j $Jobs
-
-echo "=== Build completed successfully ==="
+source "$configureScriptUnix" "$ProjectRootUnix" "$BuildDirUnix" "$InstallPrefixUnix"
+source "$buildInstallScriptUnix" "$BuildDirUnix" "$Jobs"
 "@
     }
     else {
         Write-Host "Build directory already configured, skipping configure step" -ForegroundColor Gray
         $buildScript = @"
+#!/bin/bash
 set -e
-echo "=== Building ==="
-cmake --build "$BuildDirUnix" --target all -j $Jobs
-
-echo "=== Installing ==="
-cmake --build "$BuildDirUnix" --target install -j $Jobs
-
-echo "=== Build completed successfully ==="
+source "$buildInstallScriptUnix" "$BuildDirUnix" "$Jobs"
 "@
     }
 
     # Write build script to temp file
     $tempScript = Join-Path $env:TEMP "cr2xt-build.sh"
-    # Write with Unix line endings
-    $buildScript -replace "`r`n", "`n" | Set-Content -Path $tempScript -Encoding utf8 -NoNewline
+    # Write with Unix line endings and UTF-8 without BOM
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($tempScript, ($buildScript -replace "`r`n", "`n"), $utf8NoBom)
 
     # Convert temp script path to Unix format for bash
     $tempScriptUnix = ConvertTo-UnixPath $tempScript
