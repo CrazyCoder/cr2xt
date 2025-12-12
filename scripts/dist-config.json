@@ -1,0 +1,63 @@
+{
+  "app_name": "cr2xt",
+  "app_executable": "crqt.exe",
+  "fonts": {
+    "include": [
+      "NotoSans-*.ttf",
+      "TerminusTTFWindows-*.ttf"
+    ]
+  },
+  "qt_translations": {
+    "include": [
+      "qt_en.qm",
+      "qt_ru.qm",
+      "qt_uk.qm",
+      "qt_cs.qm",
+      "qt_bg.qm",
+      "qt_hu.qm",
+      "qt_nl.qm"
+    ]
+  },
+  "config_files": {
+    "include": [
+      ".config/crui.ini"
+    ],
+    "dest_dir": ".config"
+  },
+  "exclude_dirs": [
+    "lib",
+    "include",
+    ".cache",
+    ".config",
+    "generic",
+    "iconengines",
+    "imageformats",
+    "networkinformation",
+    "tls"
+  ],
+  "exclude_files": [
+    "*.a",
+    "*.dll.a",
+    "*.lib",
+    "*.pdb",
+    "Qt6Network.dll",
+    "Qt6Svg.dll"
+  ],
+  "include_dirs": [
+    "platforms",
+    "styles",
+    "i18n",
+    "hyph",
+    "backgrounds",
+    "textures"
+  ],
+  "root_files": {
+    "include": [
+      "*.exe",
+      "*.dll",
+      "*.css",
+      "qt.conf",
+      "portable.mark"
+    ]
+  }
+}
