@@ -24,8 +24,9 @@
     Skip running windeployqt6 (use existing Qt files)
 
 .PARAMETER CleanDlls
-    Remove all *.dll files from SourceDir (except libcrengine-ng.dll) before
-    running windeployqt6. Use this to ensure clean Qt deployment after Qt updates.
+    Remove all *.dll files from SourceDir before the install step (requires -Build).
+    The install step will then place fresh DLLs from dependencies (including libcrengine-ng.dll).
+    Use this to ensure clean Qt deployment after Qt updates or dependency changes.
 
 .PARAMETER SkipMingwDlls
     Skip running mingw-bundledlls to copy MinGW dependencies
@@ -315,7 +316,28 @@ if ($Build) {
     $buildCmd = "cmake --build `"$BuildDirUnix`" --target all -j $Jobs"
     Invoke-Msys2Command -Command $buildCmd -Description "Building"
 
-    # Install step
+    # Clean DLLs before install if requested (ensures fresh DLLs from dependencies)
+    if ($CleanDlls) {
+        Write-Host "`n=== Cleaning DLLs from install directory ===" -ForegroundColor Yellow
+
+        # Ensure source directory exists before cleaning
+        if (Test-Path $SourceDirAbs) {
+            $dllsToRemove = Get-ChildItem -Path $SourceDirAbs -Filter "*.dll" -Recurse -File
+            $removedCount = 0
+            foreach ($dll in $dllsToRemove) {
+                $relativePath = $dll.FullName.Substring($SourceDirAbs.Length + 1)
+                Remove-Item -Path $dll.FullName -Force
+                Write-Host "  - $relativePath" -ForegroundColor DarkYellow
+                $removedCount++
+            }
+            Write-Host "Removed $removedCount DLL files" -ForegroundColor Yellow
+        }
+        else {
+            Write-Host "Install directory doesn't exist yet, skipping DLL cleanup" -ForegroundColor Gray
+        }
+    }
+
+    # Install step (will place fresh DLLs including libcrengine-ng.dll)
     $installCmd = "cmake --build `"$BuildDirUnix`" --target install -j $Jobs"
     Invoke-Msys2Command -Command $installCmd -Description "Installing"
 
@@ -323,29 +345,6 @@ if ($Build) {
     $ProgressPreference = $oldProgressPreference
 
     Write-Host "`nBuild and install completed successfully" -ForegroundColor Green
-}
-
-# Clean DLLs from source directory if requested (before windeployqt6)
-if ($CleanDlls) {
-    Write-Host "`n=== Cleaning DLLs from source directory ===" -ForegroundColor Yellow
-
-    # Files to preserve (case-insensitive)
-    $preserveDlls = @("libcrengine-ng.dll")
-
-    # Get all DLLs recursively
-    $dllsToRemove = Get-ChildItem -Path $SourceDir -Filter "*.dll" -Recurse -File | Where-Object {
-        $preserveDlls -notcontains $_.Name
-    }
-
-    $removedCount = 0
-    foreach ($dll in $dllsToRemove) {
-        $relativePath = $dll.FullName.Substring($SourceDir.Length + 1)
-        Remove-Item -Path $dll.FullName -Force
-        Write-Host "  - $relativePath" -ForegroundColor DarkYellow
-        $removedCount++
-    }
-
-    Write-Host "Removed $removedCount DLL files (preserved: $($preserveDlls -join ', '))" -ForegroundColor Yellow
 }
 
 # Run windeployqt6 if not skipped
