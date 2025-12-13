@@ -1,5 +1,6 @@
 /build/
 /dist/
+.claude/
 *.*~
 .DS_*
 ._*
@@ -17,4 +18,3 @@ CMakeLists.txt.user.*
 CLAUDE.md
 /*.zip
 /*.7z
-
