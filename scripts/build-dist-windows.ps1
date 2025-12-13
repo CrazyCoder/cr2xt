@@ -282,79 +282,47 @@ if ($Build) {
     $BuildDirUnix = ConvertTo-UnixPath $BuildDir
     $InstallPrefixUnix = ConvertTo-UnixPath $SourceDirAbs
 
+    # MSYS2 environment runner - executes commands in MinGW64 environment
+    $msysEnv = Join-Path $Msys2Root "usr\bin\env.exe"
+    $msysBash = Join-Path $Msys2Root "usr\bin\bash.exe"
+
+    function Invoke-Msys2Command {
+        param([string]$Command, [string]$Description)
+        Write-Host "`n=== $Description ===" -ForegroundColor Yellow
+        # Use & operator with explicit argument array to preserve quoting
+        # CLICOLOR_FORCE and CMAKE_COLOR_DIAGNOSTICS enable colored output (CMake/Ninja/GCC don't detect TTY)
+        & $msysEnv "MSYSTEM=MINGW64" "CLICOLOR_FORCE=1" "CMAKE_COLOR_DIAGNOSTICS=ON" $msysBash "-lc" $Command
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "$Description failed with exit code $LASTEXITCODE"
+            exit 1
+        }
+    }
+
     # Check if configure is needed
     $needsConfigure = -not (Test-Path (Join-Path $BuildDir "CMakeCache.txt"))
 
-    # Locate external build scripts
-    $configureScriptPath = Join-Path $ScriptDir "cmake-configure.sh"
-    $buildInstallScriptPath = Join-Path $ScriptDir "cmake-build-install.sh"
-
-    if (-not (Test-Path $configureScriptPath)) {
-        Write-Error "Configure script not found: $configureScriptPath"
-        exit 1
-    }
-    if (-not (Test-Path $buildInstallScriptPath)) {
-        Write-Error "Build script not found: $buildInstallScriptPath"
-        exit 1
-    }
-
-    $configureScriptUnix = ConvertTo-UnixPath $configureScriptPath
-    $buildInstallScriptUnix = ConvertTo-UnixPath $buildInstallScriptPath
-
-    # Build combined script that sources external scripts with arguments
     if ($needsConfigure) {
-        $buildScript = @"
-#!/bin/bash
-set -e
-source "$configureScriptUnix" "$ProjectRootUnix" "$BuildDirUnix" "$InstallPrefixUnix"
-source "$buildInstallScriptUnix" "$BuildDirUnix" "$Jobs"
-"@
+        # Configure step - use double quotes for paths with spaces, escape inner quotes
+        # -w flag suppresses all compiler warnings for cleaner distribution builds
+        $configureCmd = "cmake -S `"$ProjectRootUnix`" -B `"$BuildDirUnix`" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCON_DEBUG:BOOL=OFF -DCMAKE_INSTALL_PREFIX:PATH=`"$InstallPrefixUnix`" -DCMAKE_C_FLAGS=-w -DCMAKE_CXX_FLAGS=-w"
+        Invoke-Msys2Command -Command $configureCmd -Description "Configuring"
     }
     else {
         Write-Host "Build directory already configured, skipping configure step" -ForegroundColor Gray
-        $buildScript = @"
-#!/bin/bash
-set -e
-source "$buildInstallScriptUnix" "$BuildDirUnix" "$Jobs"
-"@
     }
 
-    # Write build script to temp file
-    $tempScript = Join-Path $env:TEMP "cr2xt-build.sh"
-    # Write with Unix line endings and UTF-8 without BOM
-    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-    [System.IO.File]::WriteAllText($tempScript, ($buildScript -replace "`r`n", "`n"), $utf8NoBom)
+    # Build step
+    $buildCmd = "cmake --build `"$BuildDirUnix`" --target all -j $Jobs"
+    Invoke-Msys2Command -Command $buildCmd -Description "Building"
 
-    # Convert temp script path to Unix format for bash
-    $tempScriptUnix = ConvertTo-UnixPath $tempScript
-
-    # Run build using MinGW64 bash directly with proper environment
-    Write-Host "`nRunning build in MinGW64 environment..." -ForegroundColor Yellow
-
-    # Set up MinGW64 environment variables
-    $mingwBin = Join-Path $Msys2Root "mingw64\bin"
-    $usrBin = Join-Path $Msys2Root "usr\bin"
-    $env:PATH = "$mingwBin;$usrBin;$env:PATH"
-    $env:MSYSTEM = "MINGW64"
-    $env:MSYSTEM_PREFIX = "/mingw64"
-    $env:MINGW_PREFIX = "/mingw64"
-
-    # Run bash directly
-    $bash = Join-Path $usrBin "bash.exe"
-    $process = Start-Process -FilePath $bash -ArgumentList "-l", $tempScriptUnix -NoNewWindow -Wait -PassThru
-
-    # Clean up temp script
-    Remove-Item -Path $tempScript -Force -ErrorAction SilentlyContinue
+    # Install step
+    $installCmd = "cmake --build `"$BuildDirUnix`" --target install -j $Jobs"
+    Invoke-Msys2Command -Command $installCmd -Description "Installing"
 
     # Restore progress preference
     $ProgressPreference = $oldProgressPreference
 
-    if ($process.ExitCode -ne 0) {
-        Write-Error "Build failed with exit code $($process.ExitCode)"
-        exit 1
-    }
-
-    Write-Host "Build and install completed successfully" -ForegroundColor Green
+    Write-Host "`nBuild and install completed successfully" -ForegroundColor Green
 }
 
 # Clean DLLs from source directory if requested (before windeployqt6)
