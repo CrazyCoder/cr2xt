@@ -1,6 +1,51 @@
 cmake_minimum_required(VERSION 3.14 FATAL_ERROR)
 project(cr2xt)
 
+# cr2xt version
+set(CR2XT_VERSION_MAJOR 0)
+set(CR2XT_VERSION_MINOR 9)
+set(CR2XT_VERSION_PATCH 0)
+set(CR2XT_VERSION "${CR2XT_VERSION_MAJOR}.${CR2XT_VERSION_MINOR}.${CR2XT_VERSION_PATCH}")
+
+# Get git version information (tag or short hash)
+find_package(Git QUIET)
+if(GIT_FOUND)
+    # Try to get version from git describe (tags)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} describe --tags --always
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE CR2XT_GIT_VERSION
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE GIT_DESCRIBE_RESULT
+    )
+    if(NOT GIT_DESCRIBE_RESULT EQUAL 0 OR CR2XT_GIT_VERSION STREQUAL "")
+        # Fallback to short commit hash
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            OUTPUT_VARIABLE CR2XT_GIT_VERSION
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+            RESULT_VARIABLE GIT_HASH_RESULT
+        )
+        if(NOT GIT_HASH_RESULT EQUAL 0)
+            set(CR2XT_GIT_VERSION "")
+        endif()
+    endif()
+else()
+    set(CR2XT_GIT_VERSION "")
+endif()
+
+# Build full version string
+if(CR2XT_GIT_VERSION)
+    set(CR2XT_VERSION_FULL "${CR2XT_VERSION} (${CR2XT_GIT_VERSION})")
+else()
+    set(CR2XT_VERSION_FULL "${CR2XT_VERSION}")
+endif()
+
+message(STATUS "cr2xt version: ${CR2XT_VERSION_FULL}")
+
 # Shared options - these propagate to subdirectories
 set(USE_QT QT6 CACHE STRING "Qt version to use")
 set_property(CACHE USE_QT PROPERTY STRINGS QT5 QT6)
@@ -42,6 +87,9 @@ endif()
 
 # Set data directory for umbrella build
 set(CRENGINE_NG_DATA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/crengine-ng/crengine/data")
+
+# Pass cr2xt version to crqt-ng (will be empty if built standalone)
+set(CR2XT_VERSION_FULL "${CR2XT_VERSION_FULL}" CACHE STRING "cr2xt umbrella project version" FORCE)
 
 # Build crqt-ng (depends on crengine-ng)
 add_subdirectory(crqt-ng)
