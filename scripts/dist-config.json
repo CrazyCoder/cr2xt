@@ -4,6 +4,7 @@
   "fonts": {
     "include": [
       "NotoSans-*.ttf",
+      "Roboto*.ttf",
       "TerminusTTFWindows-*.ttf"
     ]
   },
