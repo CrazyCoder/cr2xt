@@ -545,27 +545,6 @@ if (Test-Path $transSrc) {
     Write-Host "  + translations/ ($transCount files)" -ForegroundColor Gray
 }
 
-Write-Host "`n=== Copying config files ===" -ForegroundColor Cyan
-
-# Copy config files (crui.ini etc.)
-if ($Config.config_files -and $Config.config_files.include) {
-    $configDestDir = Join-Path $DistDir $Config.config_files.dest_dir
-    New-Item -Path $configDestDir -ItemType Directory -Force | Out-Null
-    $configCount = 0
-    foreach ($file in $Config.config_files.include) {
-        $srcFile = Join-Path $SourceDir $file
-        if (Test-Path $srcFile) {
-            $destFile = Join-Path $configDestDir (Split-Path -Leaf $file)
-            Copy-Item -Path $srcFile -Destination $destFile -Force
-            Write-Host "  + $file" -ForegroundColor Gray
-            $configCount++
-        }
-        else {
-            Write-Host "  - $file (not found, skipping)" -ForegroundColor DarkGray
-        }
-    }
-}
-
 Write-Host "`n=== Distribution Summary ===" -ForegroundColor Cyan
 
 # Calculate sizes

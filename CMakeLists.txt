@@ -93,3 +93,15 @@ set(CR2XT_VERSION_FULL "${CR2XT_VERSION_FULL}" CACHE STRING "cr2xt umbrella proj
 
 # Build crqt-ng (depends on crengine-ng)
 add_subdirectory(crqt-ng)
+
+# Install cr2xt distribution defaults file
+# On Windows: exe directory (portable)
+# On macOS: Resources bundle
+# On Linux: engine data directory (matches CRE_NG_DATADIR for system installs)
+if(WIN32)
+    install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/scripts/crui-defaults.ini DESTINATION .)
+elseif(MACOS)
+    install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/scripts/crui-defaults.ini DESTINATION Contents/Resources)
+else()
+    install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/scripts/crui-defaults.ini DESTINATION share/crengine-ng)
+endif()
