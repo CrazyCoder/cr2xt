@@ -195,28 +195,42 @@ function Find-7za {
     return $null
 }
 
-# Get version from git
-function Get-GitVersion {
+# Get version from CMakeLists.txt and git (mirrors CMake version logic)
+function Get-Cr2xtVersion {
+    $cmakePath = Join-Path $ProjectRoot "CMakeLists.txt"
+    $version = ""
+
+    # Parse CR2XT_VERSION_MAJOR/MINOR/PATCH from CMakeLists.txt
+    if (Test-Path $cmakePath) {
+        $content = Get-Content $cmakePath -Raw
+        $major = if ($content -match 'set\(CR2XT_VERSION_MAJOR\s+(\d+)\)') { $Matches[1] } else { "0" }
+        $minor = if ($content -match 'set\(CR2XT_VERSION_MINOR\s+(\d+)\)') { $Matches[1] } else { "0" }
+        $patch = if ($content -match 'set\(CR2XT_VERSION_PATCH\s+(\d+)\)') { $Matches[1] } else { "0" }
+        $version = "$major.$minor.$patch"
+    }
+
+    # Get git short hash
     try {
         Push-Location $ProjectRoot
-        $version = git describe --tags --always 2>$null
-        if ([string]::IsNullOrEmpty($version)) {
-            $version = git rev-parse --short HEAD 2>$null
+        $gitHash = git rev-parse --short HEAD 2>$null
+        if (-not [string]::IsNullOrEmpty($gitHash)) {
+            $version = "$version-$gitHash"
         }
-        if ([string]::IsNullOrEmpty($version)) {
-            $version = Get-Date -Format "yyyy.MM.dd"
-        }
-        return $version
     }
-    catch {
-        return Get-Date -Format "yyyy.MM.dd"
-    }
+    catch { }
     finally {
         Pop-Location
     }
+
+    # Fallback if nothing worked
+    if ([string]::IsNullOrEmpty($version) -or $version -eq "0.0.0") {
+        $version = Get-Date -Format "yyyy.MM.dd"
+    }
+
+    return $version
 }
 
-$Version = Get-GitVersion
+$Version = Get-Cr2xtVersion
 Write-Host "Version: $Version" -ForegroundColor Green
 
 # Run CMake build and install if requested
