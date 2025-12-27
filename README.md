@@ -57,6 +57,7 @@ Stock firmware renders 2-bit grayscale images too slowly, it's recommended to us
 - Further adjust header navigation bar margins for minimal look
 - Use Settings | Stylesheet to adjust element margins and justification
 - For advanced users, enable "Use expanded CSS file" and edit the `<format>-expanded.css` file, changes will be applied on the fly
+- View | **Rotate** (Ctrl+R) to change orientation (portrait or landscape)
 
 ### Export Dialog Features
 
