@@ -31,6 +31,7 @@
     "tls"
   ],
   "exclude_files": [
+    "*-expanded.css",
     "*.a",
     "*.dll.a",
     "*.lib",
