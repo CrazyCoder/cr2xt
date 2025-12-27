@@ -6,6 +6,7 @@
 .DS_*
 ._*
 qtcreator-build
+*.autosave
 CMakeLists.txt.user
 CMakeLists.txt.user.*
 *~
