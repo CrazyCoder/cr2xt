@@ -29,7 +29,7 @@ The converter supports all e-book formats handled by crengine:
 
 ### Supported Output Formats
 
-See [XtcFormat.md](crengine-ng/crengine/docs/XtcFormat.md) for the format specification provided by Xteink.
+See [XtcFormat.md](https://github.com/CrazyCoder/crengine-ng/blob/main/crengine/docs/XtcFormat.md) for the format specification provided by Xteink.
 Also check `*.ksy` files in the same folder for [Kaitai Struct](https://kaitai.io/) format specification. These can be used to automatically generate parsers for different languages.
 
 ## How to Use
