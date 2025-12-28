@@ -59,6 +59,28 @@ set(GRAY_BACKBUFFER_BITS 2 CACHE STRING "Gray depth for gray backbuffer")
 # Platform detection - set MACOS for Apple platforms
 if(APPLE)
     set(MACOS TRUE)
+
+    # Universal Binary support for macOS
+    # Set CMAKE_OSX_ARCHITECTURES to "arm64;x86_64" for Universal builds
+    # Note: This must be set BEFORE add_subdirectory() calls
+    # If not set, defaults to native architecture
+    if(NOT DEFINED CMAKE_OSX_ARCHITECTURES OR CMAKE_OSX_ARCHITECTURES STREQUAL "")
+        # Default to native architecture if not specified
+        execute_process(
+            COMMAND uname -m
+            OUTPUT_VARIABLE NATIVE_ARCH
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        set(CMAKE_OSX_ARCHITECTURES "${NATIVE_ARCH}" CACHE STRING "Target macOS architectures")
+    endif()
+
+    # Log the target architectures
+    list(LENGTH CMAKE_OSX_ARCHITECTURES ARCH_COUNT)
+    if(ARCH_COUNT GREATER 1)
+        message(STATUS "Building Universal Binary for architectures: ${CMAKE_OSX_ARCHITECTURES}")
+    else()
+        message(STATUS "Building for architecture: ${CMAKE_OSX_ARCHITECTURES}")
+    endif()
 endif()
 
 # Build crengine-ng first (the dependency)

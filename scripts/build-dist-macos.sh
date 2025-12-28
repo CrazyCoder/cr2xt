@@ -14,6 +14,8 @@
 #   -s, --skip-deploy    Skip running macdeployqt
 #   -d, --skip-dmg       Skip creating DMG
 #   -j, --jobs N         Number of parallel build jobs (default: auto)
+#   -u, --universal      Build Universal Binary (arm64 + x86_64)
+#   -a, --arch ARCH      Target architecture(s) (default: native, or "arm64;x86_64" for universal)
 #   -h, --help           Show this help message
 #
 # Environment variables:
@@ -46,6 +48,8 @@ BUILD=true
 SKIP_DEPLOY=false
 SKIP_DMG=false
 JOBS=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
+UNIVERSAL=false
+TARGET_ARCH=""
 
 # === Functions ===
 
@@ -129,6 +133,31 @@ find_create_dmg() {
     return 1
 }
 
+verify_architectures() {
+    local binary="$1"
+    local expected_archs="$2"
+
+    if [ ! -f "$binary" ]; then
+        log_error "Binary not found: $binary"
+        return 1
+    fi
+
+    # Get architectures from the binary
+    local actual_archs
+    actual_archs=$(lipo -archs "$binary" 2>/dev/null | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/ $//')
+
+    # Normalize expected architectures for comparison
+    local expected_sorted
+    expected_sorted=$(echo "$expected_archs" | tr ';' '\n' | sort | tr '\n' ' ' | sed 's/ $//')
+
+    if [ "$actual_archs" = "$expected_sorted" ]; then
+        return 0
+    else
+        log_warning "Architecture mismatch: expected '$expected_sorted', got '$actual_archs'"
+        return 1
+    fi
+}
+
 # === Parse Arguments ===
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -156,6 +185,14 @@ while [[ $# -gt 0 ]]; do
             JOBS="$2"
             shift 2
             ;;
+        -u|--universal)
+            UNIVERSAL=true
+            shift
+            ;;
+        -a|--arch)
+            TARGET_ARCH="$2"
+            shift 2
+            ;;
         -h|--help)
             print_help
             exit 0
@@ -170,6 +207,26 @@ done
 
 # === Main Script ===
 
+# === Determine Target Architectures ===
+if $UNIVERSAL; then
+    TARGET_ARCH="arm64;x86_64"
+fi
+
+if [ -z "$TARGET_ARCH" ]; then
+    # Default to native architecture
+    TARGET_ARCH=$(uname -m)
+fi
+
+# Determine architecture suffix for DMG naming
+if [ "$TARGET_ARCH" = "arm64;x86_64" ] || [ "$TARGET_ARCH" = "x86_64;arm64" ]; then
+    ARCH_SUFFIX="universal"
+    IS_UNIVERSAL=true
+else
+    # Single architecture - use as-is
+    ARCH_SUFFIX="${TARGET_ARCH}"
+    IS_UNIVERSAL=false
+fi
+
 VERSION=$(get_version)
 echo ""
 log_info "Building ${APP_NAME} version ${VERSION}"
@@ -178,6 +235,11 @@ log_gray "Project root: ${PROJECT_ROOT}"
 log_gray "Build directory: ${BUILD_DIR}"
 log_gray "Distribution directory: ${DIST_DIR}"
 log_gray "Jobs: ${JOBS}"
+if $IS_UNIVERSAL; then
+    log_gray "Architecture: Universal Binary (arm64 + x86_64)"
+else
+    log_gray "Architecture: ${TARGET_ARCH}"
+fi
 
 # === Clean ===
 if $CLEAN; then
@@ -187,32 +249,156 @@ if $CLEAN; then
     log_success "Cleaned"
 fi
 
-# === Build ===
-if $BUILD; then
-    echo ""
-    log_info "Configuring CMake"
+# === Build Functions ===
 
-    # CMAKE_PREFIX_PATH is needed for Homebrew libraries (HarfBuzz, WebP, etc.)
-    cmake -B "${BUILD_DIR}" -G Ninja -S "${PROJECT_ROOT}" \
+# Build a single architecture
+# Usage: build_single_arch <arch> <prefix_path> <build_dir> <install_prefix>
+build_single_arch() {
+    local arch="$1"
+    local prefix_path="$2"
+    local build_dir="$3"
+    local install_prefix="$4"
+
+    log_info "Configuring CMake for ${arch}"
+    log_gray "  Build dir: ${build_dir}"
+    log_gray "  Prefix path: ${prefix_path}"
+
+    cmake -B "${build_dir}" -G Ninja -S "${PROJECT_ROOT}" \
         -DCMAKE_BUILD_TYPE=Release \
         -DUSE_QT=QT6 \
         -DUSE_COLOR_BACKBUFFER=OFF \
         -DGRAY_BACKBUFFER_BITS=2 \
-        -DCMAKE_PREFIX_PATH=/opt/homebrew \
-        -DCMAKE_INSTALL_PREFIX="${APP_BUNDLE}" \
+        -DCMAKE_PREFIX_PATH="${prefix_path}" \
+        -DCMAKE_INSTALL_PREFIX="${install_prefix}" \
         -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+        -DCMAKE_OSX_ARCHITECTURES="${arch}" \
         -DCRE_BUILD_SHARED=ON \
         -DCRE_BUILD_STATIC=OFF
 
     echo ""
-    log_info "Building (${JOBS} jobs)"
-
-    cmake --build "${BUILD_DIR}" -j"${JOBS}"
+    log_info "Building ${arch} (${JOBS} jobs)"
+    cmake --build "${build_dir}" -j"${JOBS}"
 
     echo ""
-    log_info "Installing to ${DIST_DIR}"
+    log_info "Installing ${arch} to ${install_prefix}"
+    cmake --build "${build_dir}" --target install
+}
 
-    cmake --build "${BUILD_DIR}" --target install
+# Combine two binaries with lipo
+# Usage: lipo_combine <arm64_binary> <x86_64_binary> <output_binary>
+lipo_combine() {
+    local arm64_bin="$1"
+    local x86_64_bin="$2"
+    local output_bin="$3"
+
+    if [ ! -f "$arm64_bin" ]; then
+        log_error "arm64 binary not found: $arm64_bin"
+        return 1
+    fi
+    if [ ! -f "$x86_64_bin" ]; then
+        log_error "x86_64 binary not found: $x86_64_bin"
+        return 1
+    fi
+
+    lipo -create -output "$output_bin" "$arm64_bin" "$x86_64_bin"
+    log_gray "  Created Universal: $(basename "$output_bin")"
+}
+
+# === Build ===
+if $BUILD; then
+    echo ""
+
+    if $IS_UNIVERSAL; then
+        # Universal Binary: Build each architecture separately, then combine with lipo
+        # This is required because Homebrew libraries are single-architecture
+        ARM64_BUILD_DIR="${PROJECT_ROOT}/build/release-arm64"
+        X86_64_BUILD_DIR="${PROJECT_ROOT}/build/release-x86_64"
+        ARM64_DIST_DIR="${PROJECT_ROOT}/dist/macos-arm64"
+        X86_64_DIST_DIR="${PROJECT_ROOT}/dist/macos-x86_64"
+        ARM64_APP="${ARM64_DIST_DIR}/${APP_NAME}.app"
+        X86_64_APP="${X86_64_DIST_DIR}/${APP_NAME}.app"
+
+        # Clean architecture-specific directories if --clean was specified
+        if $CLEAN; then
+            rm -rf "${ARM64_BUILD_DIR}" "${X86_64_BUILD_DIR}"
+            rm -rf "${ARM64_DIST_DIR}" "${X86_64_DIST_DIR}"
+        fi
+
+        # Build arm64
+        log_info "Building arm64 architecture"
+        build_single_arch "arm64" "/opt/homebrew" "${ARM64_BUILD_DIR}" "${ARM64_APP}"
+
+        echo ""
+
+        # Build x86_64
+        log_info "Building x86_64 architecture"
+        build_single_arch "x86_64" "/usr/local" "${X86_64_BUILD_DIR}" "${X86_64_APP}"
+
+        echo ""
+        log_info "Creating Universal Binary"
+
+        # Use arm64 bundle as base (copy to final location)
+        rm -rf "${APP_BUNDLE}"
+        mkdir -p "$(dirname "${APP_BUNDLE}")"
+        cp -R "${ARM64_APP}" "${APP_BUNDLE}"
+
+        # Combine main executable
+        lipo_combine \
+            "${ARM64_APP}/Contents/MacOS/crqt" \
+            "${X86_64_APP}/Contents/MacOS/crqt" \
+            "${APP_BUNDLE}/Contents/MacOS/crqt"
+
+        # Combine crengine-ng framework (if it's already been moved to Contents/Frameworks)
+        # or at Library/Frameworks (before relocation)
+        ARM64_CRENGINE="${ARM64_APP}/Library/Frameworks/crengine-ng.framework/Versions/A/crengine-ng"
+        X86_64_CRENGINE="${X86_64_APP}/Library/Frameworks/crengine-ng.framework/Versions/A/crengine-ng"
+        BUNDLE_CRENGINE="${APP_BUNDLE}/Library/Frameworks/crengine-ng.framework/Versions/A/crengine-ng"
+
+        if [ -f "$ARM64_CRENGINE" ] && [ -f "$X86_64_CRENGINE" ]; then
+            lipo_combine "$ARM64_CRENGINE" "$X86_64_CRENGINE" "$BUNDLE_CRENGINE"
+        fi
+
+        log_success "Universal Binary created"
+
+        # Update BUILD_DIR to point to arm64 build for any post-build steps that need it
+        BUILD_DIR="${ARM64_BUILD_DIR}"
+
+    else
+        # Single architecture build
+        log_info "Configuring CMake"
+
+        # CMAKE_PREFIX_PATH is needed for Homebrew libraries (HarfBuzz, WebP, etc.)
+        # Different paths for different architectures:
+        #   - arm64: /opt/homebrew (Apple Silicon Homebrew)
+        #   - x86_64: /usr/local (Intel Homebrew via Rosetta)
+        if [ "$TARGET_ARCH" = "x86_64" ]; then
+            CMAKE_PREFIX_PATHS="/usr/local"
+        else
+            CMAKE_PREFIX_PATHS="/opt/homebrew"
+        fi
+
+        cmake -B "${BUILD_DIR}" -G Ninja -S "${PROJECT_ROOT}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DUSE_QT=QT6 \
+            -DUSE_COLOR_BACKBUFFER=OFF \
+            -DGRAY_BACKBUFFER_BITS=2 \
+            -DCMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATHS}" \
+            -DCMAKE_INSTALL_PREFIX="${APP_BUNDLE}" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DCMAKE_OSX_ARCHITECTURES="${TARGET_ARCH}" \
+            -DCRE_BUILD_SHARED=ON \
+            -DCRE_BUILD_STATIC=OFF
+
+        echo ""
+        log_info "Building (${JOBS} jobs)"
+
+        cmake --build "${BUILD_DIR}" -j"${JOBS}"
+
+        echo ""
+        log_info "Installing to ${DIST_DIR}"
+
+        cmake --build "${BUILD_DIR}" --target install
+    fi
 fi
 
 # Verify app bundle exists (CMake installs Contents/ directly into APP_BUNDLE)
@@ -220,6 +406,22 @@ if [ ! -f "${APP_BUNDLE}/Contents/MacOS/crqt" ]; then
     log_error "App executable not found at ${APP_BUNDLE}/Contents/MacOS/crqt"
     log_error "Run with --build to build the project first"
     exit 1
+fi
+
+# === Verify Architectures ===
+echo ""
+log_info "Verifying binary architectures"
+ACTUAL_ARCHS=$(lipo -archs "${APP_BUNDLE}/Contents/MacOS/crqt" 2>/dev/null || echo "unknown")
+log_gray "crqt: ${ACTUAL_ARCHS}"
+
+if $IS_UNIVERSAL; then
+    if verify_architectures "${APP_BUNDLE}/Contents/MacOS/crqt" "${TARGET_ARCH}"; then
+        log_success "Universal Binary verified"
+    else
+        log_error "Binary is not a Universal Binary. Ensure dependencies are available for all architectures."
+        log_error "For Universal builds, you may need x86_64 libraries installed via Rosetta or cross-compilation."
+        exit 1
+    fi
 fi
 
 # === Fix crengine-ng framework location ===
@@ -486,14 +688,7 @@ if ! $SKIP_DMG; then
     echo ""
     log_info "Creating DMG"
 
-    # Determine architecture
-    ARCH=$(uname -m)
-    case "$ARCH" in
-        arm64) ARCH_SUFFIX="arm64" ;;
-        x86_64) ARCH_SUFFIX="x86_64" ;;
-        *) ARCH_SUFFIX="$ARCH" ;;
-    esac
-
+    # ARCH_SUFFIX was determined earlier based on TARGET_ARCH
     DMG_NAME="${APP_NAME}-${VERSION}-macos-${ARCH_SUFFIX}"
     DMG_PATH="${PROJECT_ROOT}/${DMG_NAME}.dmg"
 
