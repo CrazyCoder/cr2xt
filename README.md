@@ -153,6 +153,45 @@ cmake --build build/release --target all -j$(nproc)
 cmake --build build/release --target install
 ```
 
+**macOS:**
+
+Install dependencies via Homebrew:
+
+```bash
+brew install cmake qt@6 freetype harfbuzz libpng jpeg-turbo webp fribidi zstd utf8proc fontconfig create-dmg
+```
+
+Use `scripts/build-dist-macos.sh` to build and create a DMG:
+
+```bash
+# Full build with DMG creation
+./scripts/build-dist-macos.sh --clean
+
+# Build only (skip DMG)
+./scripts/build-dist-macos.sh --clean --skip-dmg
+
+# Universal Binary (Intel + Apple Silicon)
+./scripts/build-dist-macos.sh --clean --universal
+```
+
+Or build manually:
+
+```bash
+# Configure
+cmake -B build/release \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_PREFIX_PATH=/opt/homebrew \
+    -DUSE_QT=QT6 \
+    -DUSE_COLOR_BACKBUFFER=OFF \
+    -DGRAY_BACKBUFFER_BITS=2
+
+# Build
+cmake --build build/release -j$(sysctl -n hw.ncpu)
+
+# Install to dist/macos
+cmake --build build/release --target install
+```
+
 **Linux:**
 
 ```bash
