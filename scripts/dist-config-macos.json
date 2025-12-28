@@ -30,6 +30,10 @@
     "QtQmlWorkerScript",
     "QtQuick"
   ],
+  "exclude_dylibs": [
+    "libssl.*.dylib",
+    "libcrypto.*.dylib"
+  ],
   "include_resources": [
     "textures",
     "backgrounds",

@@ -16,6 +16,7 @@
 #   -j, --jobs N         Number of parallel build jobs (default: auto)
 #   -u, --universal      Build Universal Binary (arm64 + x86_64)
 #   -a, --arch ARCH      Target architecture(s) (default: native, or "arm64;x86_64" for universal)
+#   -m, --macos-target V Minimum macOS version (default: 15.0)
 #   -h, --help           Show this help message
 #
 # Environment variables:
@@ -50,11 +51,12 @@ SKIP_DMG=false
 JOBS=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
 UNIVERSAL=false
 TARGET_ARCH=""
+MACOS_TARGET="15.0"
 
 # === Functions ===
 
 print_help() {
-    head -30 "$0" | grep '^#' | sed 's/^# \?//'
+    head -32 "$0" | grep '^#' | sed 's/^# \?//'
 }
 
 log_info() {
@@ -85,6 +87,35 @@ get_version() {
     patch=$(sed -n 's/^set(CR2XT_VERSION_PATCH \([0-9]*\))$/\1/p' "${PROJECT_ROOT}/CMakeLists.txt")
     git_hash=$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || echo "")
     echo "${major:-0}.${minor:-0}.${patch:-0}${git_hash:+-$git_hash}"
+}
+
+# Parse JSON array from config file using sed/grep (no Python dependency)
+# Usage: json_get_array <json_file> <key> [<nested_key>]
+# Example: json_get_array config.json fonts include -> returns each pattern on separate line
+json_get_array() {
+    local json_file="$1"
+    local key="$2"
+    local nested_key="${3:-}"
+
+    if [ ! -f "$json_file" ]; then
+        return 1
+    fi
+
+    local content
+    content=$(cat "$json_file")
+
+    if [ -n "$nested_key" ]; then
+        # Extract nested object first, then array
+        # This handles: "key": { "nested_key": ["item1", "item2"] }
+        content=$(echo "$content" | sed -n "/${key}/,/^[[:space:]]*}/p" | \
+                  sed -n "/${nested_key}/,/]/p")
+    else
+        # Extract top-level array: "key": ["item1", "item2"]
+        content=$(echo "$content" | sed -n "/${key}/,/]/p")
+    fi
+
+    # Extract items from array, handling quoted strings
+    echo "$content" | grep -oE '"[^"]*"' | tr -d '"' | grep -v "^${key}$" | grep -v "^${nested_key}$"
 }
 
 find_macdeployqt() {
@@ -193,6 +224,10 @@ while [[ $# -gt 0 ]]; do
             TARGET_ARCH="$2"
             shift 2
             ;;
+        -m|--macos-target)
+            MACOS_TARGET="$2"
+            shift 2
+            ;;
         -h|--help)
             print_help
             exit 0
@@ -240,6 +275,7 @@ if $IS_UNIVERSAL; then
 else
     log_gray "Architecture: ${TARGET_ARCH}"
 fi
+log_gray "macOS target: ${MACOS_TARGET}"
 
 # === Clean ===
 if $CLEAN; then
@@ -270,7 +306,7 @@ build_single_arch() {
         -DGRAY_BACKBUFFER_BITS=2 \
         -DCMAKE_PREFIX_PATH="${prefix_path}" \
         -DCMAKE_INSTALL_PREFIX="${install_prefix}" \
-        -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET="${MACOS_TARGET}" \
         -DCMAKE_OSX_ARCHITECTURES="${arch}" \
         -DCRE_BUILD_SHARED=ON \
         -DCRE_BUILD_STATIC=OFF
@@ -304,6 +340,106 @@ lipo_combine() {
     log_gray "  Created Universal: $(basename "$output_bin")"
 }
 
+# Relocate crengine-ng framework from Library/Frameworks to Contents/Frameworks
+# and fix library paths in the executable
+# Usage: relocate_crengine_framework <app_bundle>
+relocate_crengine_framework() {
+    local bundle="$1"
+    local crengine_src="${bundle}/Library/Frameworks/crengine-ng.framework"
+    local crengine_dst="${bundle}/Contents/Frameworks/crengine-ng.framework"
+
+    if [ ! -d "${crengine_src}" ]; then
+        return 0  # Nothing to relocate
+    fi
+
+    mkdir -p "${bundle}/Contents/Frameworks"
+    # Remove existing destination to allow non-clean rebuilds
+    rm -rf "${crengine_dst}"
+    mv "${crengine_src}" "${crengine_dst}"
+    rmdir "${bundle}/Library/Frameworks" 2>/dev/null || true
+    rmdir "${bundle}/Library" 2>/dev/null || true
+
+    # Fix the library path in the executable
+    install_name_tool -change \
+        "@rpath/crengine-ng.framework/Versions/A/crengine-ng" \
+        "@executable_path/../Frameworks/crengine-ng.framework/Versions/A/crengine-ng" \
+        "${bundle}/Contents/MacOS/crqt"
+
+    # Also fix the framework's install name
+    install_name_tool -id \
+        "@executable_path/../Frameworks/crengine-ng.framework/Versions/A/crengine-ng" \
+        "${crengine_dst}/Versions/A/crengine-ng"
+}
+
+# Clean up extra directories from CMake install that aren't needed in app bundle
+# Usage: cleanup_extra_dirs <app_bundle>
+cleanup_extra_dirs() {
+    local bundle="$1"
+    for extra_dir in include lib share; do
+        rm -rf "${bundle}/${extra_dir}"
+    done
+}
+
+# Copy QtDBus framework and fix library paths
+# Usage: copy_qtdbus_framework <app_bundle> <qt_lib_path>
+copy_qtdbus_framework() {
+    local bundle="$1"
+    local qt_lib_path="$2"
+    local qtdbus_dst="${bundle}/Contents/Frameworks/QtDBus.framework"
+    local qtdbus_src="${qt_lib_path}/QtDBus.framework"
+
+    if [ ! -d "${qtdbus_src}" ]; then
+        return 0  # QtDBus not available
+    fi
+
+    log_gray "    Copying QtDBus framework..."
+    rm -rf "${qtdbus_dst}"
+
+    # Use ditto to preserve framework structure, or copy and fix manually
+    if command -v ditto &>/dev/null; then
+        ditto "${qtdbus_src}" "${qtdbus_dst}"
+    else
+        cp -RL "${qtdbus_src}" "${qtdbus_dst}"
+        # Fix framework structure: top-level files should be symlinks
+        rm -f "${qtdbus_dst}/QtDBus"
+        rm -rf "${qtdbus_dst}/Resources"
+        rm -rf "${qtdbus_dst}/Versions/Current"
+        ln -sf A "${qtdbus_dst}/Versions/Current"
+        ln -sf Versions/Current/QtDBus "${qtdbus_dst}/QtDBus"
+        ln -sf Versions/Current/Resources "${qtdbus_dst}/Resources"
+    fi
+
+    # Remove development files not needed at runtime
+    rm -rf "${qtdbus_dst}/Headers"
+    rm -rf "${qtdbus_dst}/Versions/A/Headers"
+    rm -f "${qtdbus_dst}/Versions/Current/Headers" 2>/dev/null || true
+
+    # Fix the install name
+    install_name_tool -id "@executable_path/../Frameworks/QtDBus.framework/Versions/A/QtDBus" \
+        "${qtdbus_dst}/Versions/A/QtDBus" 2>/dev/null || true
+}
+
+# Fix @rpath references to QtDBus in Qt frameworks
+# Usage: fix_qtdbus_references <app_bundle> [sign]
+fix_qtdbus_references() {
+    local bundle="$1"
+    local sign="${2:-false}"
+
+    for fw in QtGui QtWidgets QtCore; do
+        local fw_path="${bundle}/Contents/Frameworks/${fw}.framework/Versions/A/${fw}"
+        if [ -f "${fw_path}" ]; then
+            install_name_tool -change \
+                "@rpath/QtDBus.framework/Versions/A/QtDBus" \
+                "@executable_path/../Frameworks/QtDBus.framework/Versions/A/QtDBus" \
+                "${fw_path}" 2>/dev/null || true
+            # Re-sign after modifying if requested
+            if [ "$sign" = "true" ]; then
+                codesign --force --sign - "${fw_path}" 2>/dev/null || true
+            fi
+        fi
+    done
+}
+
 # Deploy Qt to an app bundle using architecture-specific macdeployqt
 # Usage: deploy_qt_to_bundle <app_bundle> <arch>
 deploy_qt_to_bundle() {
@@ -331,70 +467,49 @@ deploy_qt_to_bundle() {
     # Apply framework exclusions from config
     apply_framework_exclusions "${bundle}"
 
-    # Copy QtDBus framework (required by QtGui but macdeployqt often creates just a symlink)
-    local qtdbus_dst="${bundle}/Contents/Frameworks/QtDBus.framework"
-    local qtdbus_src="${qt_lib_path}/QtDBus.framework"
-
-    if [ -d "${qtdbus_src}" ]; then
-        log_gray "    Copying QtDBus framework for ${arch}..."
-        rm -rf "${qtdbus_dst}"
-        # Use ditto to preserve framework structure, or copy and fix manually
-        if command -v ditto &>/dev/null; then
-            ditto "${qtdbus_src}" "${qtdbus_dst}"
-        else
-            cp -RL "${qtdbus_src}" "${qtdbus_dst}"
-            # Fix framework structure: top-level files should be symlinks
-            rm -f "${qtdbus_dst}/QtDBus"
-            rm -rf "${qtdbus_dst}/Headers"
-            rm -rf "${qtdbus_dst}/Resources"
-            rm -rf "${qtdbus_dst}/Versions/Current"
-            ln -sf A "${qtdbus_dst}/Versions/Current"
-            ln -sf Versions/Current/QtDBus "${qtdbus_dst}/QtDBus"
-            ln -sf Versions/Current/Headers "${qtdbus_dst}/Headers"
-            ln -sf Versions/Current/Resources "${qtdbus_dst}/Resources"
-        fi
-        # Fix the install name
-        install_name_tool -id "@executable_path/../Frameworks/QtDBus.framework/Versions/A/QtDBus" \
-            "${qtdbus_dst}/Versions/A/QtDBus" 2>/dev/null || true
-    fi
-
-    # Fix @rpath references to QtDBus in Qt frameworks
-    for fw in QtGui QtWidgets QtCore; do
-        local fw_path="${bundle}/Contents/Frameworks/${fw}.framework/Versions/A/${fw}"
-        if [ -f "${fw_path}" ]; then
-            install_name_tool -change \
-                "@rpath/QtDBus.framework/Versions/A/QtDBus" \
-                "@executable_path/../Frameworks/QtDBus.framework/Versions/A/QtDBus" \
-                "${fw_path}" 2>/dev/null || true
-        fi
-    done
+    # Copy QtDBus framework and fix references
+    copy_qtdbus_framework "${bundle}" "${qt_lib_path}"
+    fix_qtdbus_references "${bundle}"
 }
 
-# Remove unused frameworks based on dist-config-macos.json
+# Remove unused frameworks and dylibs based on dist-config-macos.json
 # Usage: apply_framework_exclusions <app_bundle>
 apply_framework_exclusions() {
     local bundle="$1"
     local config_file="${SCRIPT_DIR}/dist-config-macos.json"
+    local fw_dir="${bundle}/Contents/Frameworks"
 
-    if [ -f "$config_file" ]; then
-        local exclude_frameworks
-        exclude_frameworks=$(python3 -c "
-import json
-with open('$config_file') as f:
-    config = json.load(f)
-for fw in config.get('exclude_frameworks', []):
-    print(fw)
-" 2>/dev/null || echo "")
+    if [ ! -f "$config_file" ]; then
+        return 0
+    fi
 
-        if [ -n "$exclude_frameworks" ]; then
-            while IFS= read -r fw; do
-                local fw_path="${bundle}/Contents/Frameworks/${fw}.framework"
-                if [ -d "${fw_path}" ] || [ -L "${fw_path}" ]; then
-                    rm -rf "${fw_path}"
-                    log_gray "    Removed unused ${fw}.framework"
-                fi
-            done <<< "$exclude_frameworks"
-        fi
+    # Remove excluded frameworks
+    local exclude_frameworks
+    exclude_frameworks=$(json_get_array "$config_file" "exclude_frameworks")
+    if [ -n "$exclude_frameworks" ]; then
+        while IFS= read -r fw; do
+            [ -z "$fw" ] && continue
+            local fw_path="${fw_dir}/${fw}.framework"
+            if [ -d "${fw_path}" ] || [ -L "${fw_path}" ]; then
+                rm -rf "${fw_path}"
+                log_gray "    Removed unused ${fw}.framework"
+            fi
+        done <<< "$exclude_frameworks"
+    fi
+
+    # Remove excluded dylibs (supports glob patterns like libssl.*.dylib)
+    local exclude_dylibs
+    exclude_dylibs=$(json_get_array "$config_file" "exclude_dylibs")
+    if [ -n "$exclude_dylibs" ]; then
+        while IFS= read -r pattern; do
+            [ -z "$pattern" ] && continue
+            # Use find with -name to handle glob patterns
+            while IFS= read -r dylib; do
+                [ -z "$dylib" ] && continue
+                rm -f "$dylib"
+                log_gray "    Removed unused $(basename "$dylib")"
+            done < <(find "${fw_dir}" -maxdepth 1 -name "$pattern" -type f 2>/dev/null)
+        done <<< "$exclude_dylibs"
     fi
 }
 
@@ -483,25 +598,8 @@ if $BUILD; then
         build_single_arch "arm64" "/opt/homebrew" "${ARM64_BUILD_DIR}" "${ARM64_APP}"
 
         # Prepare arm64 bundle for Qt deployment
-        # Relocate crengine-ng framework
-        ARM64_CRENGINE_SRC="${ARM64_APP}/Library/Frameworks/crengine-ng.framework"
-        ARM64_CRENGINE_DST="${ARM64_APP}/Contents/Frameworks/crengine-ng.framework"
-        if [ -d "${ARM64_CRENGINE_SRC}" ]; then
-            mkdir -p "${ARM64_APP}/Contents/Frameworks"
-            rm -rf "${ARM64_CRENGINE_DST}"
-            mv "${ARM64_CRENGINE_SRC}" "${ARM64_CRENGINE_DST}"
-            rmdir "${ARM64_APP}/Library/Frameworks" 2>/dev/null || true
-            rmdir "${ARM64_APP}/Library" 2>/dev/null || true
-            install_name_tool -change "@rpath/crengine-ng.framework/Versions/A/crengine-ng" \
-                "@executable_path/../Frameworks/crengine-ng.framework/Versions/A/crengine-ng" \
-                "${ARM64_APP}/Contents/MacOS/crqt"
-            install_name_tool -id "@executable_path/../Frameworks/crengine-ng.framework/Versions/A/crengine-ng" \
-                "${ARM64_CRENGINE_DST}/Versions/A/crengine-ng"
-        fi
-        # Clean up extra directories before macdeployqt
-        for extra_dir in include lib share; do
-            rm -rf "${ARM64_APP}/${extra_dir}"
-        done
+        relocate_crengine_framework "${ARM64_APP}"
+        cleanup_extra_dirs "${ARM64_APP}"
 
         # Deploy Qt to arm64 bundle
         echo ""
@@ -515,25 +613,8 @@ if $BUILD; then
         build_single_arch "x86_64" "/usr/local" "${X86_64_BUILD_DIR}" "${X86_64_APP}"
 
         # Prepare x86_64 bundle for Qt deployment
-        # Relocate crengine-ng framework
-        X86_64_CRENGINE_SRC="${X86_64_APP}/Library/Frameworks/crengine-ng.framework"
-        X86_64_CRENGINE_DST="${X86_64_APP}/Contents/Frameworks/crengine-ng.framework"
-        if [ -d "${X86_64_CRENGINE_SRC}" ]; then
-            mkdir -p "${X86_64_APP}/Contents/Frameworks"
-            rm -rf "${X86_64_CRENGINE_DST}"
-            mv "${X86_64_CRENGINE_SRC}" "${X86_64_CRENGINE_DST}"
-            rmdir "${X86_64_APP}/Library/Frameworks" 2>/dev/null || true
-            rmdir "${X86_64_APP}/Library" 2>/dev/null || true
-            install_name_tool -change "@rpath/crengine-ng.framework/Versions/A/crengine-ng" \
-                "@executable_path/../Frameworks/crengine-ng.framework/Versions/A/crengine-ng" \
-                "${X86_64_APP}/Contents/MacOS/crqt"
-            install_name_tool -id "@executable_path/../Frameworks/crengine-ng.framework/Versions/A/crengine-ng" \
-                "${X86_64_CRENGINE_DST}/Versions/A/crengine-ng"
-        fi
-        # Clean up extra directories before macdeployqt
-        for extra_dir in include lib share; do
-            rm -rf "${X86_64_APP}/${extra_dir}"
-        done
+        relocate_crengine_framework "${X86_64_APP}"
+        cleanup_extra_dirs "${X86_64_APP}"
 
         # Deploy Qt to x86_64 bundle
         echo ""
@@ -580,8 +661,6 @@ if $BUILD; then
 
     else
         # Single architecture build
-        log_info "Configuring CMake"
-
         # CMAKE_PREFIX_PATH is needed for Homebrew libraries (HarfBuzz, WebP, etc.)
         # Different paths for different architectures:
         #   - arm64: /opt/homebrew (Apple Silicon Homebrew)
@@ -592,27 +671,7 @@ if $BUILD; then
             CMAKE_PREFIX_PATHS="/opt/homebrew"
         fi
 
-        cmake -B "${BUILD_DIR}" -G Ninja -S "${PROJECT_ROOT}" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DUSE_QT=QT6 \
-            -DUSE_COLOR_BACKBUFFER=OFF \
-            -DGRAY_BACKBUFFER_BITS=2 \
-            -DCMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATHS}" \
-            -DCMAKE_INSTALL_PREFIX="${APP_BUNDLE}" \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
-            -DCMAKE_OSX_ARCHITECTURES="${TARGET_ARCH}" \
-            -DCRE_BUILD_SHARED=ON \
-            -DCRE_BUILD_STATIC=OFF
-
-        echo ""
-        log_info "Building (${JOBS} jobs)"
-
-        cmake --build "${BUILD_DIR}" -j"${JOBS}"
-
-        echo ""
-        log_info "Installing to ${DIST_DIR}"
-
-        cmake --build "${BUILD_DIR}" --target install
+        build_single_arch "${TARGET_ARCH}" "${CMAKE_PREFIX_PATHS}" "${BUILD_DIR}" "${APP_BUNDLE}"
     fi
 fi
 
@@ -641,40 +700,16 @@ fi
 
 # === Fix crengine-ng framework location ===
 # CMake installs the framework to APP_BUNDLE/Library/Frameworks but it needs to be in Contents/Frameworks
-CRENGINE_SRC="${APP_BUNDLE}/Library/Frameworks/crengine-ng.framework"
-CRENGINE_DST="${APP_BUNDLE}/Contents/Frameworks/crengine-ng.framework"
-if [ -d "${CRENGINE_SRC}" ]; then
+if [ -d "${APP_BUNDLE}/Library/Frameworks/crengine-ng.framework" ]; then
     echo ""
     log_info "Relocating crengine-ng framework"
-    mkdir -p "${APP_BUNDLE}/Contents/Frameworks"
-    # Remove existing destination to allow non-clean rebuilds
-    rm -rf "${CRENGINE_DST}"
-    mv "${CRENGINE_SRC}" "${CRENGINE_DST}"
-    rmdir "${APP_BUNDLE}/Library/Frameworks" 2>/dev/null || true
-    rmdir "${APP_BUNDLE}/Library" 2>/dev/null || true
-
-    # Fix the library path in the executable
-    install_name_tool -change \
-        "@rpath/crengine-ng.framework/Versions/A/crengine-ng" \
-        "@executable_path/../Frameworks/crengine-ng.framework/Versions/A/crengine-ng" \
-        "${APP_BUNDLE}/Contents/MacOS/crqt"
-
-    # Also fix the framework's install name
-    install_name_tool -id \
-        "@executable_path/../Frameworks/crengine-ng.framework/Versions/A/crengine-ng" \
-        "${CRENGINE_DST}/Versions/A/crengine-ng"
-
+    relocate_crengine_framework "${APP_BUNDLE}"
     log_success "Framework relocated and paths fixed"
 fi
 
 # === Clean up extra installed directories ===
 # CMake installs include/, lib/, share/ which aren't needed in the app bundle
-for extra_dir in include lib share; do
-    if [ -d "${APP_BUNDLE}/${extra_dir}" ]; then
-        rm -rf "${APP_BUNDLE}/${extra_dir}"
-        log_gray "Removed ${extra_dir}/"
-    fi
-done
+cleanup_extra_dirs "${APP_BUNDLE}"
 
 # === Qt Deployment ===
 if ! $SKIP_DEPLOY; then
@@ -704,55 +739,22 @@ if ! $SKIP_DEPLOY; then
     fi
 
     # Remove unnecessary Qt frameworks from config (pulled in by macdeployqt but not used)
-    CONFIG_FILE="${SCRIPT_DIR}/dist-config-macos.json"
-    if [ -f "$CONFIG_FILE" ]; then
-        EXCLUDE_FRAMEWORKS=$(python3 -c "
-import json
-with open('$CONFIG_FILE') as f:
-    config = json.load(f)
-for fw in config.get('exclude_frameworks', []):
-    print(fw)
-" 2>/dev/null || echo "")
+    apply_framework_exclusions "${APP_BUNDLE}"
 
-        if [ -n "$EXCLUDE_FRAMEWORKS" ]; then
-            while IFS= read -r fw; do
-                FW_PATH="${APP_BUNDLE}/Contents/Frameworks/${fw}.framework"
-                if [ -d "${FW_PATH}" ] || [ -L "${FW_PATH}" ]; then
-                    rm -rf "${FW_PATH}"
-                    log_gray "  Removed unused ${fw}.framework"
-                fi
-            done <<< "$EXCLUDE_FRAMEWORKS"
-        fi
+    # Determine Qt library path based on target architecture
+    if [ "$TARGET_ARCH" = "x86_64" ]; then
+        QT_LIB_PATH="/usr/local/lib"
+    else
+        QT_LIB_PATH="/opt/homebrew/lib"
     fi
 
     # Copy QtDBus framework (required by QtGui on macOS but macdeployqt often creates just a symlink)
-    QTDBUS_DST="${APP_BUNDLE}/Contents/Frameworks/QtDBus.framework"
-    QTDBUS_SRC="/opt/homebrew/lib/QtDBus.framework"
+    copy_qtdbus_framework "${APP_BUNDLE}" "${QT_LIB_PATH}"
+    # Sign QtDBus after copying
+    codesign --force --sign - "${APP_BUNDLE}/Contents/Frameworks/QtDBus.framework/Versions/A/QtDBus" 2>/dev/null || true
 
-    # Remove any existing symlink or directory and copy fresh
-    if [ -d "${QTDBUS_SRC}" ]; then
-        log_gray "Copying QtDBus framework..."
-        rm -rf "${QTDBUS_DST}"
-        cp -RL "${QTDBUS_SRC}" "${QTDBUS_DST}"
-        # Fix the install name
-        install_name_tool -id "@executable_path/../Frameworks/QtDBus.framework/Versions/A/QtDBus" \
-            "${QTDBUS_DST}/Versions/A/QtDBus" 2>/dev/null || true
-        # Sign the framework immediately after modifying
-        codesign --force --sign - "${QTDBUS_DST}/Versions/A/QtDBus" 2>/dev/null || true
-    fi
-
-    # Fix @rpath references to QtDBus in Qt frameworks
-    for fw in QtGui QtWidgets QtCore; do
-        FW_PATH="${APP_BUNDLE}/Contents/Frameworks/${fw}.framework/Versions/A/${fw}"
-        if [ -f "${FW_PATH}" ]; then
-            install_name_tool -change \
-                "@rpath/QtDBus.framework/Versions/A/QtDBus" \
-                "@executable_path/../Frameworks/QtDBus.framework/Versions/A/QtDBus" \
-                "${FW_PATH}" 2>/dev/null || true
-            # Re-sign after modifying
-            codesign --force --sign - "${FW_PATH}" 2>/dev/null || true
-        fi
-    done
+    # Fix @rpath references to QtDBus in Qt frameworks (with signing)
+    fix_qtdbus_references "${APP_BUNDLE}" "true"
 fi
 
 # === Copy Additional Resources ===
@@ -775,18 +777,13 @@ FONTS_SRC="${PROJECT_ROOT}/fonts"
 if [ -d "${FONTS_SRC}" ]; then
     mkdir -p "${RESOURCES}/fonts"
 
-    # Read font patterns from config using Python (available on macOS)
-    FONT_PATTERNS=$(python3 -c "
-import json
-with open('$CONFIG_FILE') as f:
-    config = json.load(f)
-for pattern in config.get('fonts', {}).get('include', []):
-    print(pattern)
-" 2>/dev/null || echo "")
+    # Read font patterns from config using native shell parsing
+    FONT_PATTERNS=$(json_get_array "$CONFIG_FILE" "fonts" "include")
 
     if [ -n "$FONT_PATTERNS" ]; then
         font_count=0
         while IFS= read -r pattern; do
+            [ -z "$pattern" ] && continue
             for font in "${FONTS_SRC}/"$pattern; do
                 if [ -f "$font" ]; then
                     cp "$font" "${RESOURCES}/fonts/"
@@ -905,9 +902,10 @@ if ! $SKIP_DMG; then
 
     # ARCH_SUFFIX was determined earlier based on TARGET_ARCH
     DMG_NAME="${APP_NAME}-${VERSION}-macos-${ARCH_SUFFIX}"
-    DMG_PATH="${PROJECT_ROOT}/${DMG_NAME}.dmg"
+    DMG_PATH="${PROJECT_ROOT}/dist/${DMG_NAME}.dmg"
 
-    # Remove existing DMG
+    # Ensure dist directory exists and remove existing DMG
+    mkdir -p "${PROJECT_ROOT}/dist"
     rm -f "${DMG_PATH}"
 
     # Check for create-dmg (preferred)
