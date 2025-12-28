@@ -56,6 +56,11 @@ option(STATIC_CRENGINE_NG "Link with the static version of crengine-ng" OFF)
 set(USE_COLOR_BACKBUFFER OFF CACHE BOOL "Use color backbuffer")
 set(GRAY_BACKBUFFER_BITS 2 CACHE STRING "Gray depth for gray backbuffer")
 
+# Platform detection - set MACOS for Apple platforms
+if(APPLE)
+    set(MACOS TRUE)
+endif()
+
 # Build crengine-ng first (the dependency)
 add_subdirectory(crengine-ng)
 
@@ -90,6 +95,7 @@ set(CRENGINE_NG_DATA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/crengine-ng/crengine/data"
 
 # Pass cr2xt version to crqt-ng (will be empty if built standalone)
 set(CR2XT_VERSION_FULL "${CR2XT_VERSION_FULL}" CACHE STRING "cr2xt umbrella project version" FORCE)
+set(CR2XT_VERSION "${CR2XT_VERSION}" CACHE STRING "cr2xt version (without git hash)" FORCE)
 
 # Build crqt-ng (depends on crengine-ng)
 add_subdirectory(crqt-ng)
