@@ -304,12 +304,166 @@ lipo_combine() {
     log_gray "  Created Universal: $(basename "$output_bin")"
 }
 
+# Deploy Qt to an app bundle using architecture-specific macdeployqt
+# Usage: deploy_qt_to_bundle <app_bundle> <arch>
+deploy_qt_to_bundle() {
+    local bundle="$1"
+    local arch="$2"
+    local macdeployqt_path
+    local qt_lib_path
+
+    if [ "$arch" = "arm64" ]; then
+        macdeployqt_path="/opt/homebrew/opt/qt@6/bin/macdeployqt"
+        qt_lib_path="/opt/homebrew/lib"
+    else
+        macdeployqt_path="/usr/local/opt/qt@6/bin/macdeployqt"
+        qt_lib_path="/usr/local/lib"
+    fi
+
+    if [ ! -x "$macdeployqt_path" ]; then
+        log_error "macdeployqt not found for $arch at $macdeployqt_path"
+        return 1
+    fi
+
+    log_gray "  Using: ${macdeployqt_path}"
+    "${macdeployqt_path}" "${bundle}" -verbose=1 2>&1 | grep -v "^Log:" | grep -v "^  " | grep -v "^ERROR:" || true
+
+    # Apply framework exclusions from config
+    apply_framework_exclusions "${bundle}"
+
+    # Copy QtDBus framework (required by QtGui but macdeployqt often creates just a symlink)
+    local qtdbus_dst="${bundle}/Contents/Frameworks/QtDBus.framework"
+    local qtdbus_src="${qt_lib_path}/QtDBus.framework"
+
+    if [ -d "${qtdbus_src}" ]; then
+        log_gray "    Copying QtDBus framework for ${arch}..."
+        rm -rf "${qtdbus_dst}"
+        # Use ditto to preserve framework structure, or copy and fix manually
+        if command -v ditto &>/dev/null; then
+            ditto "${qtdbus_src}" "${qtdbus_dst}"
+        else
+            cp -RL "${qtdbus_src}" "${qtdbus_dst}"
+            # Fix framework structure: top-level files should be symlinks
+            rm -f "${qtdbus_dst}/QtDBus"
+            rm -rf "${qtdbus_dst}/Headers"
+            rm -rf "${qtdbus_dst}/Resources"
+            rm -rf "${qtdbus_dst}/Versions/Current"
+            ln -sf A "${qtdbus_dst}/Versions/Current"
+            ln -sf Versions/Current/QtDBus "${qtdbus_dst}/QtDBus"
+            ln -sf Versions/Current/Headers "${qtdbus_dst}/Headers"
+            ln -sf Versions/Current/Resources "${qtdbus_dst}/Resources"
+        fi
+        # Fix the install name
+        install_name_tool -id "@executable_path/../Frameworks/QtDBus.framework/Versions/A/QtDBus" \
+            "${qtdbus_dst}/Versions/A/QtDBus" 2>/dev/null || true
+    fi
+
+    # Fix @rpath references to QtDBus in Qt frameworks
+    for fw in QtGui QtWidgets QtCore; do
+        local fw_path="${bundle}/Contents/Frameworks/${fw}.framework/Versions/A/${fw}"
+        if [ -f "${fw_path}" ]; then
+            install_name_tool -change \
+                "@rpath/QtDBus.framework/Versions/A/QtDBus" \
+                "@executable_path/../Frameworks/QtDBus.framework/Versions/A/QtDBus" \
+                "${fw_path}" 2>/dev/null || true
+        fi
+    done
+}
+
+# Remove unused frameworks based on dist-config-macos.json
+# Usage: apply_framework_exclusions <app_bundle>
+apply_framework_exclusions() {
+    local bundle="$1"
+    local config_file="${SCRIPT_DIR}/dist-config-macos.json"
+
+    if [ -f "$config_file" ]; then
+        local exclude_frameworks
+        exclude_frameworks=$(python3 -c "
+import json
+with open('$config_file') as f:
+    config = json.load(f)
+for fw in config.get('exclude_frameworks', []):
+    print(fw)
+" 2>/dev/null || echo "")
+
+        if [ -n "$exclude_frameworks" ]; then
+            while IFS= read -r fw; do
+                local fw_path="${bundle}/Contents/Frameworks/${fw}.framework"
+                if [ -d "${fw_path}" ] || [ -L "${fw_path}" ]; then
+                    rm -rf "${fw_path}"
+                    log_gray "    Removed unused ${fw}.framework"
+                fi
+            done <<< "$exclude_frameworks"
+        fi
+    fi
+}
+
+# Create Universal frameworks by combining arm64 and x86_64 versions
+# Usage: create_universal_frameworks <arm64_app> <x86_64_app> <output_app>
+create_universal_frameworks() {
+    local arm64_app="$1"
+    local x86_64_app="$2"
+    local output_app="$3"
+    local arm64_fw="${arm64_app}/Contents/Frameworks"
+    local x86_64_fw="${x86_64_app}/Contents/Frameworks"
+    local output_fw="${output_app}/Contents/Frameworks"
+
+    log_info "Creating Universal frameworks"
+
+    # Find all frameworks and dylibs in arm64 bundle
+    for fw_path in "${arm64_fw}"/*.framework; do
+        if [ -d "$fw_path" ]; then
+            local fw_name=$(basename "$fw_path" .framework)
+            local arm64_bin="${fw_path}/Versions/A/${fw_name}"
+            local x86_64_bin="${x86_64_fw}/${fw_name}.framework/Versions/A/${fw_name}"
+            local output_bin="${output_fw}/${fw_name}.framework/Versions/A/${fw_name}"
+
+            if [ -f "$arm64_bin" ] && [ -f "$x86_64_bin" ]; then
+                lipo_combine "$arm64_bin" "$x86_64_bin" "$output_bin"
+            elif [ -f "$arm64_bin" ]; then
+                log_warning "  ${fw_name}: x86_64 version not found, using arm64 only"
+            fi
+        fi
+    done
+
+    # Handle dylibs in Frameworks directory
+    for dylib in "${arm64_fw}"/*.dylib; do
+        if [ -f "$dylib" ]; then
+            local dylib_name=$(basename "$dylib")
+            local arm64_bin="$dylib"
+            local x86_64_bin="${x86_64_fw}/${dylib_name}"
+            local output_bin="${output_fw}/${dylib_name}"
+
+            if [ -f "$x86_64_bin" ]; then
+                lipo_combine "$arm64_bin" "$x86_64_bin" "$output_bin"
+            fi
+        fi
+    done
+
+    # Handle PlugIns
+    local arm64_plugins="${arm64_app}/Contents/PlugIns"
+    local x86_64_plugins="${x86_64_app}/Contents/PlugIns"
+    local output_plugins="${output_app}/Contents/PlugIns"
+
+    if [ -d "$arm64_plugins" ]; then
+        find "$arm64_plugins" -name "*.dylib" -type f | while read -r arm64_plugin; do
+            local rel_path="${arm64_plugin#${arm64_plugins}/}"
+            local x86_64_plugin="${x86_64_plugins}/${rel_path}"
+            local output_plugin="${output_plugins}/${rel_path}"
+
+            if [ -f "$x86_64_plugin" ]; then
+                lipo_combine "$arm64_plugin" "$x86_64_plugin" "$output_plugin"
+            fi
+        done
+    fi
+}
+
 # === Build ===
 if $BUILD; then
     echo ""
 
     if $IS_UNIVERSAL; then
-        # Universal Binary: Build each architecture separately, then combine with lipo
+        # Universal Binary: Build each architecture separately, deploy Qt, then combine with lipo
         # This is required because Homebrew libraries are single-architecture
         ARM64_BUILD_DIR="${PROJECT_ROOT}/build/release-arm64"
         X86_64_BUILD_DIR="${PROJECT_ROOT}/build/release-x86_64"
@@ -328,19 +482,72 @@ if $BUILD; then
         log_info "Building arm64 architecture"
         build_single_arch "arm64" "/opt/homebrew" "${ARM64_BUILD_DIR}" "${ARM64_APP}"
 
+        # Prepare arm64 bundle for Qt deployment
+        # Relocate crengine-ng framework
+        ARM64_CRENGINE_SRC="${ARM64_APP}/Library/Frameworks/crengine-ng.framework"
+        ARM64_CRENGINE_DST="${ARM64_APP}/Contents/Frameworks/crengine-ng.framework"
+        if [ -d "${ARM64_CRENGINE_SRC}" ]; then
+            mkdir -p "${ARM64_APP}/Contents/Frameworks"
+            rm -rf "${ARM64_CRENGINE_DST}"
+            mv "${ARM64_CRENGINE_SRC}" "${ARM64_CRENGINE_DST}"
+            rmdir "${ARM64_APP}/Library/Frameworks" 2>/dev/null || true
+            rmdir "${ARM64_APP}/Library" 2>/dev/null || true
+            install_name_tool -change "@rpath/crengine-ng.framework/Versions/A/crengine-ng" \
+                "@executable_path/../Frameworks/crengine-ng.framework/Versions/A/crengine-ng" \
+                "${ARM64_APP}/Contents/MacOS/crqt"
+            install_name_tool -id "@executable_path/../Frameworks/crengine-ng.framework/Versions/A/crengine-ng" \
+                "${ARM64_CRENGINE_DST}/Versions/A/crengine-ng"
+        fi
+        # Clean up extra directories before macdeployqt
+        for extra_dir in include lib share; do
+            rm -rf "${ARM64_APP}/${extra_dir}"
+        done
+
+        # Deploy Qt to arm64 bundle
+        echo ""
+        log_info "Deploying Qt to arm64 bundle"
+        deploy_qt_to_bundle "${ARM64_APP}" "arm64"
+
         echo ""
 
         # Build x86_64
         log_info "Building x86_64 architecture"
         build_single_arch "x86_64" "/usr/local" "${X86_64_BUILD_DIR}" "${X86_64_APP}"
 
+        # Prepare x86_64 bundle for Qt deployment
+        # Relocate crengine-ng framework
+        X86_64_CRENGINE_SRC="${X86_64_APP}/Library/Frameworks/crengine-ng.framework"
+        X86_64_CRENGINE_DST="${X86_64_APP}/Contents/Frameworks/crengine-ng.framework"
+        if [ -d "${X86_64_CRENGINE_SRC}" ]; then
+            mkdir -p "${X86_64_APP}/Contents/Frameworks"
+            rm -rf "${X86_64_CRENGINE_DST}"
+            mv "${X86_64_CRENGINE_SRC}" "${X86_64_CRENGINE_DST}"
+            rmdir "${X86_64_APP}/Library/Frameworks" 2>/dev/null || true
+            rmdir "${X86_64_APP}/Library" 2>/dev/null || true
+            install_name_tool -change "@rpath/crengine-ng.framework/Versions/A/crengine-ng" \
+                "@executable_path/../Frameworks/crengine-ng.framework/Versions/A/crengine-ng" \
+                "${X86_64_APP}/Contents/MacOS/crqt"
+            install_name_tool -id "@executable_path/../Frameworks/crengine-ng.framework/Versions/A/crengine-ng" \
+                "${X86_64_CRENGINE_DST}/Versions/A/crengine-ng"
+        fi
+        # Clean up extra directories before macdeployqt
+        for extra_dir in include lib share; do
+            rm -rf "${X86_64_APP}/${extra_dir}"
+        done
+
+        # Deploy Qt to x86_64 bundle
+        echo ""
+        log_info "Deploying Qt to x86_64 bundle"
+        deploy_qt_to_bundle "${X86_64_APP}" "x86_64"
+
         echo ""
         log_info "Creating Universal Binary"
 
         # Use arm64 bundle as base (copy to final location)
+        # Use ditto to preserve framework symlinks properly
         rm -rf "${APP_BUNDLE}"
         mkdir -p "$(dirname "${APP_BUNDLE}")"
-        cp -R "${ARM64_APP}" "${APP_BUNDLE}"
+        ditto "${ARM64_APP}" "${APP_BUNDLE}"
 
         # Combine main executable
         lipo_combine \
@@ -348,20 +555,28 @@ if $BUILD; then
             "${X86_64_APP}/Contents/MacOS/crqt" \
             "${APP_BUNDLE}/Contents/MacOS/crqt"
 
-        # Combine crengine-ng framework (if it's already been moved to Contents/Frameworks)
-        # or at Library/Frameworks (before relocation)
-        ARM64_CRENGINE="${ARM64_APP}/Library/Frameworks/crengine-ng.framework/Versions/A/crengine-ng"
-        X86_64_CRENGINE="${X86_64_APP}/Library/Frameworks/crengine-ng.framework/Versions/A/crengine-ng"
-        BUNDLE_CRENGINE="${APP_BUNDLE}/Library/Frameworks/crengine-ng.framework/Versions/A/crengine-ng"
+        # Combine crengine-ng framework
+        ARM64_CRENGINE="${ARM64_APP}/Contents/Frameworks/crengine-ng.framework/Versions/A/crengine-ng"
+        X86_64_CRENGINE="${X86_64_APP}/Contents/Frameworks/crengine-ng.framework/Versions/A/crengine-ng"
+        BUNDLE_CRENGINE="${APP_BUNDLE}/Contents/Frameworks/crengine-ng.framework/Versions/A/crengine-ng"
 
         if [ -f "$ARM64_CRENGINE" ] && [ -f "$X86_64_CRENGINE" ]; then
             lipo_combine "$ARM64_CRENGINE" "$X86_64_CRENGINE" "$BUNDLE_CRENGINE"
         fi
 
+        # Combine all Qt frameworks and plugins
+        create_universal_frameworks "${ARM64_APP}" "${X86_64_APP}" "${APP_BUNDLE}"
+
+        # Apply framework exclusions to final bundle (in case any were missed)
+        apply_framework_exclusions "${APP_BUNDLE}"
+
         log_success "Universal Binary created"
 
         # Update BUILD_DIR to point to arm64 build for any post-build steps that need it
         BUILD_DIR="${ARM64_BUILD_DIR}"
+
+        # Mark that Qt deployment was already done for Universal builds
+        SKIP_DEPLOY=true
 
     else
         # Single architecture build
