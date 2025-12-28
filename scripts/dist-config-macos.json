@@ -1,0 +1,39 @@
+{
+  "app_name": "cr2xt",
+  "app_executable": "crqt",
+  "bundle_identifier": "com.github.crazycoder.cr2xt",
+  "min_macos_version": "11.0",
+  "fonts": {
+    "include": [
+      "NotoSans-*.ttf",
+      "Roboto*.ttf",
+      "TerminusTTFWindows-*.ttf"
+    ]
+  },
+  "qt_translations": {
+    "include": [
+      "qt_en.qm",
+      "qt_ru.qm",
+      "qt_uk.qm",
+      "qt_cs.qm",
+      "qt_bg.qm",
+      "qt_hu.qm",
+      "qt_nl.qm"
+    ]
+  },
+  "exclude_frameworks": [
+    "QtNetwork",
+    "QtSvg",
+    "QtQml",
+    "QtQmlMeta",
+    "QtQmlModels",
+    "QtQmlWorkerScript",
+    "QtQuick"
+  ],
+  "include_resources": [
+    "textures",
+    "backgrounds",
+    "hyph",
+    "i18n"
+  ]
+}
