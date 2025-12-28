@@ -919,10 +919,10 @@ if ! $SKIP_DMG; then
             --volicon "${APP_BUNDLE}/Contents/Resources/crqt.icns" \
             --window-pos 200 120 \
             --window-size 600 400 \
-            --icon-size 80 \
-            --icon "${APP_NAME}.app" 175 190 \
+            --icon-size 100 \
+            --icon "${APP_NAME}.app" 150 190 \
             --hide-extension "${APP_NAME}.app" \
-            --app-drop-link 425 190 \
+            --app-drop-link 450 190 \
             --no-internet-enable \
             "${DMG_PATH}" \
             "${APP_BUNDLE}" || {
@@ -938,14 +938,15 @@ if ! $SKIP_DMG; then
         log_gray "create-dmg not found, using hdiutil"
         log_gray "Install create-dmg for prettier DMG: brew install create-dmg"
 
-        # Fallback to hdiutil
-        STAGING="${BUILD_DIR}/dmg-staging"
+        # Fallback to hdiutil - use /tmp to avoid caching issues
+        STAGING="/tmp/cr2xt-dmg-$$"
         rm -rf "${STAGING}"
         mkdir -p "${STAGING}"
         cp -R "${APP_BUNDLE}" "${STAGING}/"
         ln -s /Applications "${STAGING}/Applications"
 
-        hdiutil create -volname "${APP_NAME} ${VERSION}" \
+        # Use simple volume name for cleaner icon display
+        hdiutil create -volname "${APP_NAME}" \
             -srcfolder "${STAGING}" \
             -ov -format UDZO \
             "${DMG_PATH}"
