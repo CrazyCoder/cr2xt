@@ -45,6 +45,29 @@ Download the latest release version from the [Releases](https://github.com/Crazy
 
 Export preview supports mouse wheel scrolling and zooming (with Ctrl+Mouse Wheel). Double-click to reset zoom.
 
+### macOS release builds
+
+Download the DMG from the [Releases](https://github.com/CrazyCoder/cr2xt/releases) page.
+
+**Important:** The app is ad-hoc signed (not notarized by Apple). macOS Gatekeeper will block it on first run. To open:
+
+1. **Option A** - Right-click method:
+   - Right-click (or Control-click) on `cr2xt.app`
+   - Select **Open** from the context menu
+   - Click **Open** in the dialog that appears
+
+2. **Option B** - System Settings:
+   - Try to open the app normally (it will be blocked)
+   - Go to **System Settings** → **Privacy & Security**
+   - Scroll down and click **Open Anyway** next to the cr2xt message
+
+3. **Option C** - Terminal (removes quarantine flag):
+   ```bash
+   xattr -cr /Applications/cr2xt.app
+   ```
+
+After allowing once, the app will open normally.
+
 Stock firmware renders 2-bit grayscale images too slowly, it's recommended to use 1-bit monochrome mode.
 
 ### Tips
@@ -97,7 +120,7 @@ This project is a **converter-focused fork** with several key differences:
 
 - [ ] cr2xt CLI converter
 - [ ] Docker image with CLI converter
-- [ ] macOS builds
+- [x] macOS builds
 - [ ] Linux builds
 - [ ] Unofficial compression for XTC format to be used in custom firmwares
 - [ ] New custom XTB format with compression
