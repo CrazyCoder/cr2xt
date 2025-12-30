@@ -15,6 +15,7 @@
 #   -d, --skip-dmg       Skip creating DMG
 #   -j, --jobs N         Number of parallel build jobs (default: auto)
 #   -u, --universal      Build Universal Binary (arm64 + x86_64)
+#   -A, --all            Build all targets (arm64, x86_64, and universal) with 3 DMGs
 #   -a, --arch ARCH      Target architecture(s) (default: native, or "arm64;x86_64" for universal)
 #   -m, --macos-target V Minimum macOS version (default: from dist-config-macos.json)
 #   -h, --help           Show this help message
@@ -50,13 +51,14 @@ SKIP_DEPLOY=false
 SKIP_DMG=false
 JOBS=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
 UNIVERSAL=false
+BUILD_ALL=false
 TARGET_ARCH=""
 MACOS_TARGET=""  # Will be set from config or command line
 
 # === Functions ===
 
 print_help() {
-    head -32 "$0" | grep '^#' | sed 's/^# \?//'
+    head -28 "$0" | grep '^#' | sed 's/^# \?//'
 }
 
 log_info() {
@@ -180,6 +182,67 @@ find_create_dmg() {
     return 1
 }
 
+# Create DMG for a specific app bundle
+# Usage: create_dmg_for_bundle <app_bundle> <arch_suffix> <version>
+create_dmg_for_bundle() {
+    local bundle="$1"
+    local arch_suffix="$2"
+    local version="$3"
+    local dmg_name="${APP_NAME}-${version}-macos-${arch_suffix}"
+    local dmg_path="${PROJECT_ROOT}/dist/${dmg_name}.dmg"
+
+    if [ ! -d "$bundle" ]; then
+        log_warning "Bundle not found: $bundle"
+        return 1
+    fi
+
+    log_gray "Creating: ${dmg_name}.dmg"
+
+    mkdir -p "${PROJECT_ROOT}/dist"
+    rm -f "${dmg_path}"
+
+    if CREATE_DMG=$(find_create_dmg); then
+        "${CREATE_DMG}" \
+            --volname "${APP_NAME} ${version}" \
+            --volicon "${bundle}/Contents/Resources/crqt.icns" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "${APP_NAME}.app" 150 190 \
+            --hide-extension "${APP_NAME}.app" \
+            --app-drop-link 450 190 \
+            --no-internet-enable \
+            "${dmg_path}" \
+            "${bundle}" || {
+                if [ ! -f "${dmg_path}" ]; then
+                    log_error "create-dmg failed for ${arch_suffix}"
+                    return 1
+                fi
+            }
+    else
+        local staging="/tmp/cr2xt-dmg-${arch_suffix}-$$"
+        rm -rf "${staging}"
+        mkdir -p "${staging}"
+        cp -R "${bundle}" "${staging}/"
+        ln -s /Applications "${staging}/Applications"
+
+        hdiutil create -volname "${APP_NAME}" \
+            -srcfolder "${staging}" \
+            -ov -format UDZO \
+            "${dmg_path}"
+
+        rm -rf "${staging}"
+    fi
+
+    if [ -f "${dmg_path}" ]; then
+        local dmg_size
+        dmg_size=$(du -h "${dmg_path}" | cut -f1)
+        log_success "  ${dmg_name}.dmg (${dmg_size})"
+        return 0
+    fi
+    return 1
+}
+
 verify_architectures() {
     local binary="$1"
     local expected_archs="$2"
@@ -236,6 +299,11 @@ while [[ $# -gt 0 ]]; do
             UNIVERSAL=true
             shift
             ;;
+        -A|--all)
+            BUILD_ALL=true
+            UNIVERSAL=true  # --all implies universal build
+            shift
+            ;;
         -a|--arch)
             TARGET_ARCH="$2"
             shift 2
@@ -278,6 +346,11 @@ else
     IS_UNIVERSAL=false
 fi
 
+# Update build and dist directories to be architecture-specific
+BUILD_DIR="${PROJECT_ROOT}/build/release-${ARCH_SUFFIX}"
+DIST_DIR="${PROJECT_ROOT}/dist/macos-${ARCH_SUFFIX}"
+APP_BUNDLE="${DIST_DIR}/${APP_NAME}.app"
+
 # === Determine macOS Target Version ===
 # Priority: command line arg > config file > hardcoded fallback
 if [ -z "$MACOS_TARGET" ]; then
@@ -307,7 +380,14 @@ log_gray "macOS target: ${MACOS_TARGET}"
 if $CLEAN; then
     echo ""
     log_info "Cleaning build directories"
-    rm -rf "${BUILD_DIR}" "${DIST_DIR}"
+    if $IS_UNIVERSAL; then
+        # Universal builds use separate arch directories plus final universal output
+        rm -rf "${PROJECT_ROOT}/build/release-arm64" "${PROJECT_ROOT}/build/release-x86_64"
+        rm -rf "${PROJECT_ROOT}/dist/macos-arm64" "${PROJECT_ROOT}/dist/macos-x86_64"
+    else
+        rm -rf "${BUILD_DIR}"
+    fi
+    rm -rf "${DIST_DIR}"
     log_success "Cleaned"
 fi
 
@@ -683,6 +763,23 @@ deploy_qt_to_bundle() {
         return 1
     fi
 
+    # Clean stale Qt artifacts from previous builds before macdeployqt runs
+    local fw_dir="${bundle}/Contents/Frameworks"
+    local plugins_dir="${bundle}/Contents/PlugIns"
+
+    if [ -d "$fw_dir" ]; then
+        rm -f "${fw_dir}"/*.dylib 2>/dev/null || true
+        # Remove Qt frameworks (but keep crengine-ng.framework)
+        for fw in "${fw_dir}"/Qt*.framework; do
+            [ -d "$fw" ] && rm -rf "$fw"
+        done
+    fi
+
+    # Remove Qt plugins (macdeployqt will re-copy them)
+    if [ -d "$plugins_dir" ]; then
+        rm -rf "$plugins_dir"
+    fi
+
     log_gray "  Using: ${macdeployqt_path}"
     "${macdeployqt_path}" "${bundle}" -verbose=1 2>&1 | grep -v "^Log:" | grep -v "^  " | grep -v "^ERROR:" || true
 
@@ -698,6 +795,10 @@ deploy_qt_to_bundle() {
 
     # Fix crengine-ng Homebrew dependencies
     fix_crengine_dependencies "${bundle}"
+
+    # Re-sign entire bundle after all modifications (install_name_tool invalidates signatures)
+    log_gray "  Re-signing bundle..."
+    codesign --force --deep --sign - "${bundle}" 2>/dev/null || true
 }
 
 # Remove unused frameworks and dylibs based on dist-config-macos.json
@@ -832,12 +933,6 @@ if $BUILD; then
         X86_64_DIST_DIR="${PROJECT_ROOT}/dist/macos-x86_64"
         ARM64_APP="${ARM64_DIST_DIR}/${APP_NAME}.app"
         X86_64_APP="${X86_64_DIST_DIR}/${APP_NAME}.app"
-
-        # Clean architecture-specific directories if --clean was specified
-        if $CLEAN; then
-            rm -rf "${ARM64_BUILD_DIR}" "${X86_64_BUILD_DIR}"
-            rm -rf "${ARM64_DIST_DIR}" "${X86_64_DIST_DIR}"
-        fi
 
         # Build arm64
         log_info "Building arm64 architecture"
@@ -1151,63 +1246,19 @@ if ! $SKIP_DMG; then
     echo ""
     log_info "Creating DMG"
 
-    # ARCH_SUFFIX was determined earlier based on TARGET_ARCH
-    DMG_NAME="${APP_NAME}-${VERSION}-macos-${ARCH_SUFFIX}"
-    DMG_PATH="${PROJECT_ROOT}/dist/${DMG_NAME}.dmg"
-
-    # Ensure dist directory exists and remove existing DMG
-    mkdir -p "${PROJECT_ROOT}/dist"
-    rm -f "${DMG_PATH}"
-
-    # Check for create-dmg (preferred)
-    if CREATE_DMG=$(find_create_dmg); then
-        log_gray "Using create-dmg: ${CREATE_DMG}"
-
-        "${CREATE_DMG}" \
-            --volname "${APP_NAME} ${VERSION}" \
-            --volicon "${APP_BUNDLE}/Contents/Resources/crqt.icns" \
-            --window-pos 200 120 \
-            --window-size 600 400 \
-            --icon-size 100 \
-            --icon "${APP_NAME}.app" 150 190 \
-            --hide-extension "${APP_NAME}.app" \
-            --app-drop-link 450 190 \
-            --no-internet-enable \
-            "${DMG_PATH}" \
-            "${APP_BUNDLE}" || {
-                # create-dmg returns non-zero even on success sometimes
-                if [ -f "${DMG_PATH}" ]; then
-                    log_warning "create-dmg returned non-zero but DMG was created"
-                else
-                    log_error "create-dmg failed"
-                    exit 1
-                fi
-            }
-    else
+    if ! find_create_dmg &>/dev/null; then
         log_gray "create-dmg not found, using hdiutil"
         log_gray "Install create-dmg for prettier DMG: brew install create-dmg"
-
-        # Fallback to hdiutil - use /tmp to avoid caching issues
-        STAGING="/tmp/cr2xt-dmg-$$"
-        rm -rf "${STAGING}"
-        mkdir -p "${STAGING}"
-        cp -R "${APP_BUNDLE}" "${STAGING}/"
-        ln -s /Applications "${STAGING}/Applications"
-
-        # Use simple volume name for cleaner icon display
-        hdiutil create -volname "${APP_NAME}" \
-            -srcfolder "${STAGING}" \
-            -ov -format UDZO \
-            "${DMG_PATH}"
-
-        rm -rf "${STAGING}"
     fi
 
-    if [ -f "${DMG_PATH}" ]; then
-        DMG_SIZE=$(du -h "${DMG_PATH}" | cut -f1)
-        echo ""
-        log_success "Created: ${DMG_NAME}.dmg (${DMG_SIZE})"
-        log_gray "Location: ${DMG_PATH}"
+    if $BUILD_ALL; then
+        # Create DMGs for all three targets (bundles already exist from universal build)
+        create_dmg_for_bundle "${PROJECT_ROOT}/dist/macos-arm64/${APP_NAME}.app" "arm64" "${VERSION}"
+        create_dmg_for_bundle "${PROJECT_ROOT}/dist/macos-x86_64/${APP_NAME}.app" "x86_64" "${VERSION}"
+        create_dmg_for_bundle "${PROJECT_ROOT}/dist/macos-universal/${APP_NAME}.app" "universal" "${VERSION}"
+    else
+        # Single target DMG
+        create_dmg_for_bundle "${APP_BUNDLE}" "${ARCH_SUFFIX}" "${VERSION}"
     fi
 fi
 
@@ -1215,7 +1266,22 @@ fi
 echo ""
 log_info "Distribution Summary"
 
-if [ -d "${APP_BUNDLE}" ]; then
+print_bundle_info() {
+    local bundle="$1"
+    local label="$2"
+    if [ -d "$bundle" ]; then
+        local size
+        size=$(du -sh "$bundle" | cut -f1)
+        echo "  ${label}: ${size}"
+    fi
+}
+
+if $BUILD_ALL; then
+    echo "App bundles:"
+    print_bundle_info "${PROJECT_ROOT}/dist/macos-arm64/${APP_NAME}.app" "arm64"
+    print_bundle_info "${PROJECT_ROOT}/dist/macos-x86_64/${APP_NAME}.app" "x86_64"
+    print_bundle_info "${PROJECT_ROOT}/dist/macos-universal/${APP_NAME}.app" "universal"
+elif [ -d "${APP_BUNDLE}" ]; then
     BUNDLE_SIZE=$(du -sh "${APP_BUNDLE}" | cut -f1)
     FILE_COUNT=$(find "${APP_BUNDLE}" -type f | wc -l | tr -d ' ')
     echo "App bundle: ${APP_BUNDLE}"
