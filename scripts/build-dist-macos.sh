@@ -406,15 +406,66 @@ cleanup_extra_dirs() {
     done
 }
 
+# Search for a dylib in Homebrew locations matching the required architecture
+# Usage: find_homebrew_dylib <dylib_name> <arch>
+# Returns: path to the dylib or empty string if not found
+find_homebrew_dylib() {
+    local dylib_name="$1"
+    local arch="$2"
+    local search_dirs
+
+    if [ "$arch" = "x86_64" ]; then
+        search_dirs="/usr/local/lib /usr/local/opt/*/lib"
+    else
+        search_dirs="/opt/homebrew/lib /opt/homebrew/opt/*/lib"
+    fi
+
+    # Use subshell with nullglob to properly expand globs
+    (
+        shopt -s nullglob
+        for d in $search_dirs; do
+            if [ -f "$d/${dylib_name}" ]; then
+                local lib_arch
+                lib_arch=$(lipo -archs "$d/${dylib_name}" 2>/dev/null)
+                if [[ "$lib_arch" == *"$arch"* ]]; then
+                    echo "$d/${dylib_name}"
+                    return
+                fi
+            fi
+        done
+    )
+}
+
+# Bundle a dylib: copy, fix install name, sign, and recursively process
+# Usage: bundle_dylib <src_path> <dest_path> <fw_dir> <label> <processed_file>
+bundle_dylib() {
+    local src_path="$1"
+    local dest_path="$2"
+    local fw_dir="$3"
+    local label="$4"
+    local processed_file="$5"
+    local dylib_name
+    dylib_name=$(basename "$dest_path")
+
+    cp "$src_path" "$dest_path"
+    chmod 755 "$dest_path"
+    log_gray "    Bundled${label}: ${dylib_name}"
+
+    install_name_tool -id "@executable_path/../Frameworks/${dylib_name}" \
+        "$dest_path" 2>/dev/null || true
+    codesign --force --sign - "$dest_path" 2>/dev/null || true
+
+    # Recursively process this library's dependencies
+    fix_homebrew_dependencies "$dest_path" "$fw_dir" "$processed_file"
+}
+
 # Bundle and fix all Homebrew dependencies for a binary (recursively)
-# Also fixes @rpath references to bundled libraries
+# Also fixes @rpath and @executable_path references to bundled libraries
 # Usage: fix_homebrew_dependencies <binary_path> <frameworks_dir> [processed_list_file]
 fix_homebrew_dependencies() {
     local binary="$1"
     local fw_dir="$2"
     local processed_file="${3:-}"
-    local binary_name
-    binary_name=$(basename "$binary")
 
     # Create temp file to track processed libraries (avoid infinite recursion)
     if [ -z "$processed_file" ]; then
@@ -428,77 +479,52 @@ fix_homebrew_dependencies() {
     fi
     echo "$binary" >> "$processed_file"
 
-    # Find all Homebrew dependencies (absolute paths)
-    local deps
-    deps=$(otool -L "$binary" 2>/dev/null | tail -n +2 | awk '{print $1}' | grep "^/opt/homebrew\|^/usr/local/opt" || true)
+    # Determine architecture of the binary
+    local binary_arch
+    binary_arch=$(lipo -archs "$binary" 2>/dev/null | awk '{print $1}')
 
-    # Process each Homebrew dependency
+    # Get all dependencies
+    local all_deps
+    all_deps=$(otool -L "$binary" 2>/dev/null | tail -n +2 | awk '{print $1}')
+
     local dep dep_name bundled_path
-    for dep in $deps; do
+    for dep in $all_deps; do
         dep_name=$(basename "$dep")
         bundled_path="${fw_dir}/${dep_name}"
 
-        # Copy if not already bundled
-        if [ ! -f "$bundled_path" ] && [ -f "$dep" ]; then
-            cp "$dep" "$bundled_path"
-            chmod 755 "$bundled_path"
-            log_gray "    Bundled: ${dep_name}"
+        # Skip frameworks and system libraries
+        [[ "$dep" == *".framework"* ]] && continue
+        [[ "$dep" == "/usr/lib/"* ]] && continue
+        [[ "$dep" == "/System/"* ]] && continue
 
-            # Fix the install name of the copied library
-            install_name_tool -id "@executable_path/../Frameworks/${dep_name}" \
-                "$bundled_path" 2>/dev/null || true
-
-            # Sign the copied library
-            codesign --force --sign - "$bundled_path" 2>/dev/null || true
-
-            # Recursively process this library's dependencies
-            fix_homebrew_dependencies "$bundled_path" "$fw_dir" "$processed_file"
-        fi
-
-        # Fix the reference in the original binary
-        install_name_tool -change "$dep" \
-            "@executable_path/../Frameworks/${dep_name}" \
-            "$binary" 2>/dev/null || true
-    done
-
-    # Fix @rpath references - either to bundled libraries or bundle from Homebrew
-    local rpath_deps
-    rpath_deps=$(otool -L "$binary" 2>/dev/null | tail -n +2 | awk '{print $1}' | grep "^@rpath/" | grep -v "framework" || true)
-
-    for dep in $rpath_deps; do
-        dep_name=$(basename "$dep")
-        bundled_path="${fw_dir}/${dep_name}"
-
-        # If not bundled, try to find and copy from Homebrew
-        if [ ! -f "$bundled_path" ]; then
-            local src_path=""
-            # Search common Homebrew locations
-            for search_dir in /opt/homebrew/lib /opt/homebrew/opt/*/lib /usr/local/lib /usr/local/opt/*/lib; do
-                if [ -f "${search_dir}/${dep_name}" ]; then
-                    src_path="${search_dir}/${dep_name}"
-                    break
-                fi
-            done
-
-            if [ -n "$src_path" ] && [ -f "$src_path" ]; then
-                cp "$src_path" "$bundled_path"
-                chmod 755 "$bundled_path"
-                log_gray "    Bundled (rpath): ${dep_name}"
-
-                install_name_tool -id "@executable_path/../Frameworks/${dep_name}" \
-                    "$bundled_path" 2>/dev/null || true
-                codesign --force --sign - "$bundled_path" 2>/dev/null || true
-
-                # Recursively process this library
-                fix_homebrew_dependencies "$bundled_path" "$fw_dir" "$processed_file"
+        # Handle absolute Homebrew paths
+        if [[ "$dep" == /opt/homebrew/* ]] || [[ "$dep" == /usr/local/opt/* ]]; then
+            if [ ! -f "$bundled_path" ] && [ -f "$dep" ]; then
+                bundle_dylib "$dep" "$bundled_path" "$fw_dir" "" "$processed_file"
             fi
-        fi
-
-        # Fix the reference if library is now bundled
-        if [ -f "$bundled_path" ]; then
             install_name_tool -change "$dep" \
                 "@executable_path/../Frameworks/${dep_name}" \
                 "$binary" 2>/dev/null || true
+
+        # Handle @rpath or @executable_path references to missing libraries
+        elif [[ "$dep" == @rpath/* ]] || [[ "$dep" == @executable_path/../Frameworks/* ]]; then
+            if [ ! -f "$bundled_path" ]; then
+                local src_path
+                src_path=$(find_homebrew_dylib "$dep_name" "$binary_arch")
+                if [ -n "$src_path" ]; then
+                    local label=""
+                    [[ "$dep" == @rpath/* ]] && label=" (rpath)"
+                    [[ "$dep" == @executable_path/* ]] && label=" (exec_path)"
+                    bundle_dylib "$src_path" "$bundled_path" "$fw_dir" "$label" "$processed_file"
+                else
+                    log_warning "    Cannot find ${binary_arch} version of ${dep_name}"
+                fi
+            fi
+            if [ -f "$bundled_path" ]; then
+                install_name_tool -change "$dep" \
+                    "@executable_path/../Frameworks/${dep_name}" \
+                    "$binary" 2>/dev/null || true
+            fi
         fi
     done
 }
@@ -577,7 +603,8 @@ copy_qtdbus_framework() {
         libdbus_name=$(basename "$libdbus_path")
         log_gray "    Bundling ${libdbus_name}..."
 
-        # Copy libdbus to Frameworks
+        # Copy libdbus to Frameworks (remove existing first for non-clean rebuilds)
+        rm -f "${fw_dir}/${libdbus_name}"
         cp "$libdbus_path" "${fw_dir}/${libdbus_name}"
 
         # Fix libdbus install name
@@ -615,6 +642,26 @@ fix_qtdbus_references() {
     done
 }
 
+# Remove dylibs that don't match the expected architecture
+# Usage: remove_wrong_arch_dylibs <app_bundle> <expected_arch>
+remove_wrong_arch_dylibs() {
+    local bundle="$1"
+    local expected_arch="$2"
+    local fw_dir="${bundle}/Contents/Frameworks"
+
+    for dylib in "${fw_dir}"/*.dylib; do
+        if [ -f "$dylib" ]; then
+            local actual_arch
+            actual_arch=$(lipo -archs "$dylib" 2>/dev/null)
+            # Check if expected architecture is present
+            if [[ "$actual_arch" != *"$expected_arch"* ]]; then
+                log_warning "    Removing wrong-arch $(basename "$dylib") (has: $actual_arch, need: $expected_arch)"
+                rm -f "$dylib"
+            fi
+        fi
+    done
+}
+
 # Deploy Qt to an app bundle using architecture-specific macdeployqt
 # Usage: deploy_qt_to_bundle <app_bundle> <arch>
 deploy_qt_to_bundle() {
@@ -638,6 +685,9 @@ deploy_qt_to_bundle() {
 
     log_gray "  Using: ${macdeployqt_path}"
     "${macdeployqt_path}" "${bundle}" -verbose=1 2>&1 | grep -v "^Log:" | grep -v "^  " | grep -v "^ERROR:" || true
+
+    # Remove any wrong-architecture dylibs that macdeployqt might have bundled
+    remove_wrong_arch_dylibs "${bundle}" "$arch"
 
     # Apply framework exclusions from config
     apply_framework_exclusions "${bundle}"
