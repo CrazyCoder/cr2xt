@@ -129,31 +129,6 @@ json_get_value() {
         sed -E 's/.*:[[:space:]]*"([^"]*)"/\1/' | head -1
 }
 
-find_macdeployqt() {
-    # Try PATH first
-    if command -v macdeployqt &>/dev/null; then
-        which macdeployqt
-        return 0
-    fi
-
-    # Try Homebrew locations
-    local paths=(
-        "/opt/homebrew/opt/qt@6/bin/macdeployqt"
-        "/opt/homebrew/bin/macdeployqt"
-        "/usr/local/opt/qt@6/bin/macdeployqt"
-        "/usr/local/bin/macdeployqt"
-    )
-
-    for path in "${paths[@]}"; do
-        if [ -x "$path" ]; then
-            echo "$path"
-            return 0
-        fi
-    done
-
-    return 1
-}
-
 find_create_dmg() {
     if command -v create-dmg &>/dev/null; then
         which create-dmg
