@@ -1104,89 +1104,124 @@ if ! $SKIP_DEPLOY; then
 fi
 
 # === Copy Additional Resources ===
+
+# Copy resources to a bundle
+# Usage: copy_resources_to_bundle <app_bundle> <label>
+copy_resources_to_bundle() {
+    local bundle="$1"
+    local label="$2"
+    local resources="${bundle}/Contents/Resources"
+    local config_file="${SCRIPT_DIR}/dist-config-macos.json"
+    local fonts_src="${PROJECT_ROOT}/fonts"
+
+    [ -d "$bundle" ] || return 0
+
+    log_gray "  ${label}:"
+
+    # Copy crui-defaults.ini
+    if [ -f "${PROJECT_ROOT}/scripts/crui-defaults.ini" ]; then
+        cp "${PROJECT_ROOT}/scripts/crui-defaults.ini" "${resources}/"
+        log_gray "    + crui-defaults.ini"
+    fi
+
+    # Copy fonts
+    if [ -d "${fonts_src}" ]; then
+        mkdir -p "${resources}/fonts"
+        local font_patterns
+        font_patterns=$(json_get_array "$config_file" "fonts" "include")
+
+        if [ -n "$font_patterns" ]; then
+            local font_count=0
+            while IFS= read -r pattern; do
+                [ -z "$pattern" ] && continue
+                for font in "${fonts_src}/"$pattern; do
+                    if [ -f "$font" ]; then
+                        cp "$font" "${resources}/fonts/"
+                        ((font_count++)) || true
+                    fi
+                done
+            done <<< "$font_patterns"
+            if [ $font_count -gt 0 ]; then
+                log_gray "    + fonts/ (${font_count} files)"
+            fi
+        fi
+    fi
+
+    # Copy Qt translations from the bundle's dist directory
+    local bundle_dist
+    bundle_dist=$(dirname "$bundle")
+    if [ -d "${bundle_dist}/translations" ]; then
+        mkdir -p "${resources}/translations"
+        local trans_count=0
+        for lang in en ru uk cs bg hu nl; do
+            local src="${bundle_dist}/translations/qt_${lang}.qm"
+            if [ -f "$src" ]; then
+                cp "$src" "${resources}/translations/"
+                ((trans_count++)) || true
+            fi
+        done
+        if [ $trans_count -gt 0 ]; then
+            log_gray "    + translations/ (${trans_count} files)"
+        fi
+    fi
+}
+
 echo ""
 log_info "Copying additional resources"
 
-RESOURCES="${APP_BUNDLE}/Contents/Resources"
-
-# Copy crui-defaults.ini
-if [ -f "${PROJECT_ROOT}/scripts/crui-defaults.ini" ]; then
-    cp "${PROJECT_ROOT}/scripts/crui-defaults.ini" "${RESOURCES}/"
-    log_gray "  + crui-defaults.ini"
-fi
-
-# Copy fonts from project fonts/ directory (if exists)
-# Fonts should be placed in PROJECT_ROOT/fonts/ (NotoSans-*.ttf, Roboto*.ttf, etc.)
-CONFIG_FILE="${SCRIPT_DIR}/dist-config-macos.json"
-FONTS_SRC="${PROJECT_ROOT}/fonts"
-
-if [ -d "${FONTS_SRC}" ]; then
-    mkdir -p "${RESOURCES}/fonts"
-
-    # Read font patterns from config using native shell parsing
-    FONT_PATTERNS=$(json_get_array "$CONFIG_FILE" "fonts" "include")
-
-    if [ -n "$FONT_PATTERNS" ]; then
-        font_count=0
-        while IFS= read -r pattern; do
-            [ -z "$pattern" ] && continue
-            for font in "${FONTS_SRC}/"$pattern; do
-                if [ -f "$font" ]; then
-                    cp "$font" "${RESOURCES}/fonts/"
-                    ((font_count++)) || true
-                fi
-            done
-        done <<< "$FONT_PATTERNS"
-        if [ $font_count -gt 0 ]; then
-            log_gray "  + fonts/ (${font_count} files)"
-        else
-            log_gray "  ! No fonts matching patterns in ${FONTS_SRC}/"
-        fi
-    fi
+if $BUILD_ALL; then
+    # Copy resources to all three bundles
+    copy_resources_to_bundle "${PROJECT_ROOT}/dist/macos-arm64/${APP_NAME}.app" "arm64"
+    copy_resources_to_bundle "${PROJECT_ROOT}/dist/macos-x86_64/${APP_NAME}.app" "x86_64"
+    copy_resources_to_bundle "${PROJECT_ROOT}/dist/macos-universal/${APP_NAME}.app" "universal"
 else
-    log_gray "  ! No fonts/ directory found (optional: create ${PROJECT_ROOT}/fonts/)"
-fi
-
-# Copy Qt translations (filtered)
-if [ -d "${DIST_DIR}/translations" ]; then
-    mkdir -p "${RESOURCES}/translations"
-    trans_count=0
-    for lang in en ru uk cs bg hu nl; do
-        src="${DIST_DIR}/translations/qt_${lang}.qm"
-        if [ -f "$src" ]; then
-            cp "$src" "${RESOURCES}/translations/"
-            ((trans_count++)) || true
-        fi
-    done
-    if [ $trans_count -gt 0 ]; then
-        log_gray "  + translations/ (${trans_count} files)"
-    fi
+    copy_resources_to_bundle "${APP_BUNDLE}" "${ARCH_SUFFIX}"
 fi
 
 # === Ad-hoc Code Signing ===
-# Always ad-hoc sign if no Developer ID - required on Apple Silicon
-if [ -z "${DEVELOPER_ID:-}" ]; then
-    echo ""
-    log_info "Ad-hoc signing app bundle"
+
+# Ad-hoc sign a bundle
+# Usage: adhoc_sign_bundle <app_bundle> <label>
+adhoc_sign_bundle() {
+    local bundle="$1"
+    local label="$2"
+
+    [ -d "$bundle" ] || return 0
+
+    log_gray "  Signing ${label}..."
 
     # Sign all frameworks and dylibs first
-    find "${APP_BUNDLE}/Contents/Frameworks" -type f \( -name "*.dylib" -o -perm +111 \) -exec \
+    find "${bundle}/Contents/Frameworks" -type f \( -name "*.dylib" -o -perm +111 \) -exec \
         codesign --force --sign - {} \; 2>/dev/null || true
 
     # Sign framework bundles
-    find "${APP_BUNDLE}/Contents/Frameworks" -name "*.framework" -type d -exec \
+    find "${bundle}/Contents/Frameworks" -name "*.framework" -type d -exec \
         codesign --force --sign - {} \; 2>/dev/null || true
 
     # Sign PlugIns
-    find "${APP_BUNDLE}/Contents/PlugIns" -name "*.dylib" -exec \
+    find "${bundle}/Contents/PlugIns" -name "*.dylib" -exec \
         codesign --force --sign - {} \; 2>/dev/null || true
 
     # Sign the main executable and crengine-ng framework
-    codesign --force --sign - "${APP_BUNDLE}/Contents/Frameworks/crengine-ng.framework" 2>/dev/null || true
-    codesign --force --sign - "${APP_BUNDLE}/Contents/MacOS/crqt"
+    codesign --force --sign - "${bundle}/Contents/Frameworks/crengine-ng.framework" 2>/dev/null || true
+    codesign --force --sign - "${bundle}/Contents/MacOS/crqt"
 
     # Sign the entire bundle
-    codesign --force --sign - "${APP_BUNDLE}"
+    codesign --force --sign - "${bundle}"
+}
+
+# Always ad-hoc sign if no Developer ID - required on Apple Silicon
+if [ -z "${DEVELOPER_ID:-}" ]; then
+    echo ""
+    log_info "Ad-hoc signing app bundles"
+
+    if $BUILD_ALL; then
+        adhoc_sign_bundle "${PROJECT_ROOT}/dist/macos-arm64/${APP_NAME}.app" "arm64"
+        adhoc_sign_bundle "${PROJECT_ROOT}/dist/macos-x86_64/${APP_NAME}.app" "x86_64"
+        adhoc_sign_bundle "${PROJECT_ROOT}/dist/macos-universal/${APP_NAME}.app" "universal"
+    else
+        adhoc_sign_bundle "${APP_BUNDLE}" "${ARCH_SUFFIX}"
+    fi
 
     log_success "Ad-hoc signing completed"
 fi
