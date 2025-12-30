@@ -18,6 +18,7 @@
 #   -A, --all            Build all targets (arm64, x86_64, and universal) with 3 DMGs
 #   -a, --arch ARCH      Target architecture(s) (default: native, or "arm64;x86_64" for universal)
 #   -m, --macos-target V Minimum macOS version (default: from dist-config-macos.json)
+#   -H, --headless       Force headless DMG creation (skip Finder prettifying)
 #   -h, --help           Show this help message
 
 
@@ -47,11 +48,12 @@ UNIVERSAL=false
 BUILD_ALL=false
 TARGET_ARCH=""
 MACOS_TARGET=""  # Will be set from config or command line
+HEADLESS=false   # Force headless DMG creation
 
 # === Functions ===
 
 print_help() {
-    head -21 "$0" | grep '^#' | sed 's/^# \?//'
+    head -22 "$0" | grep '^#' | sed 's/^# \?//'
 }
 
 log_info() {
@@ -150,6 +152,20 @@ find_create_dmg() {
     return 1
 }
 
+# Check if GUI (WindowServer) is accessible for Finder operations
+# Returns 0 if GUI is available, 1 if running headless
+has_gui_access() {
+    # Check if there's an active GUI session we can use
+    # This works even over SSH if a user is logged into the desktop
+    if pgrep -x "Finder" >/dev/null 2>&1; then
+        # Finder is running, try to actually communicate with it
+        if osascript -e 'tell application "System Events" to return name of first process whose frontmost is true' >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
 # Create DMG for a specific app bundle
 # Usage: create_dmg_for_bundle <app_bundle> <arch_suffix> <version>
 create_dmg_for_bundle() {
@@ -170,18 +186,35 @@ create_dmg_for_bundle() {
     rm -f "${dmg_path}"
 
     if CREATE_DMG=$(find_create_dmg); then
-        "${CREATE_DMG}" \
-            --volname "${APP_NAME} ${version}" \
-            --volicon "${bundle}/Contents/Resources/crqt.icns" \
-            --window-pos 200 120 \
-            --window-size 600 400 \
-            --icon-size 100 \
-            --icon "${APP_NAME}.app" 150 190 \
-            --hide-extension "${APP_NAME}.app" \
-            --app-drop-link 450 190 \
-            --no-internet-enable \
-            "${dmg_path}" \
-            "${bundle}" || {
+        # Build create-dmg arguments
+        local dmg_args=(
+            --volname "${APP_NAME} ${version}"
+            --volicon "${bundle}/Contents/Resources/crqt.icns"
+            --window-pos 200 120
+            --window-size 540 380
+            --icon-size 100
+            --icon "${APP_NAME}.app" 135 120
+            --hide-extension "${APP_NAME}.app"
+            --app-drop-link 405 120
+            --no-internet-enable
+        )
+
+        # Add background image if available
+        local bg_image="${PROJECT_ROOT}/assets/dmg-background.png"
+        if [ -f "$bg_image" ]; then
+            dmg_args+=(--background "$bg_image")
+        fi
+
+        # Check if GUI is available for Finder prettifying
+        if $HEADLESS; then
+            log_gray "Headless mode: skipping Finder prettifying"
+            dmg_args+=(--skip-jenkins)
+        elif ! has_gui_access; then
+            log_gray "No GUI access detected, using --skip-jenkins for headless DMG creation"
+            dmg_args+=(--skip-jenkins)
+        fi
+
+        "${CREATE_DMG}" "${dmg_args[@]}" "${dmg_path}" "${bundle}" || {
                 if [ ! -f "${dmg_path}" ]; then
                     log_error "create-dmg failed for ${arch_suffix}"
                     return 1
@@ -279,6 +312,10 @@ while [[ $# -gt 0 ]]; do
         -m|--macos-target)
             MACOS_TARGET="$2"
             shift 2
+            ;;
+        -H|--headless)
+            HEADLESS=true
+            shift
             ;;
         -h|--help)
             print_help
