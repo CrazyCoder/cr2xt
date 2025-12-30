@@ -18,7 +18,7 @@
     Skip creating the ZIP archive
 
 .PARAMETER Clean
-    Remove dist directory before building
+    Remove win subdirectory before building (preserves archive artifacts in dist root)
 
 .PARAMETER SkipWinDeployQt
     Skip running windeployqt6 (use existing Qt files)
@@ -85,6 +85,9 @@ $ProjectRoot = Split-Path -Parent $ScriptDir
 if ([string]::IsNullOrEmpty($DistDir)) {
     $DistDir = Join-Path $ProjectRoot "dist"
 }
+
+# Subdirectory for Windows files (archives go to dist root)
+$DistSubDir = Join-Path $DistDir "win"
 
 # Load configuration
 $ConfigPath = Join-Path $ScriptDir "dist-config.json"
@@ -460,15 +463,18 @@ if (-not $SkipMingwDlls) {
     }
 }
 
-# Clean if requested
-if ($Clean -and (Test-Path $DistDir)) {
-    Write-Host "`nCleaning existing dist directory..." -ForegroundColor Yellow
-    Remove-Item -Path $DistDir -Recurse -Force
+# Clean if requested (only removes win subdirectory, preserves archives in dist root)
+if ($Clean -and (Test-Path $DistSubDir)) {
+    Write-Host "`nCleaning existing win subdirectory..." -ForegroundColor Yellow
+    Remove-Item -Path $DistSubDir -Recurse -Force
 }
 
-# Create dist directory
+# Create dist directory and win subdirectory
 if (-not (Test-Path $DistDir)) {
     New-Item -Path $DistDir -ItemType Directory -Force | Out-Null
+}
+if (-not (Test-Path $DistSubDir)) {
+    New-Item -Path $DistSubDir -ItemType Directory -Force | Out-Null
 }
 
 Write-Host "`n=== Copying root files ===" -ForegroundColor Cyan
@@ -486,7 +492,7 @@ foreach ($pattern in $Config.root_files.include) {
             }
         }
         if (-not $exclude) {
-            Copy-Item -Path $file.FullName -Destination $DistDir -Force
+            Copy-Item -Path $file.FullName -Destination $DistSubDir -Force
             Write-Host "  + $($file.Name)" -ForegroundColor Gray
         }
     }
@@ -498,7 +504,7 @@ Write-Host "`n=== Copying directories ===" -ForegroundColor Cyan
 foreach ($dir in $Config.include_dirs) {
     $srcPath = Join-Path $SourceDir $dir
     if (Test-Path $srcPath) {
-        $destPath = Join-Path $DistDir $dir
+        $destPath = Join-Path $DistSubDir $dir
         Copy-Item -Path $srcPath -Destination $destPath -Recurse -Force
         $files = @(Get-ChildItem -Path $destPath -Recurse -File -ErrorAction SilentlyContinue)
         $count = $files.Count
@@ -513,7 +519,7 @@ Write-Host "`n=== Copying fonts (filtered) ===" -ForegroundColor Cyan
 
 # Copy fonts with include filter
 $fontsSrc = Join-Path $SourceDir "fonts"
-$fontsDest = Join-Path $DistDir "fonts"
+$fontsDest = Join-Path $DistSubDir "fonts"
 if (Test-Path $fontsSrc) {
     New-Item -Path $fontsDest -ItemType Directory -Force | Out-Null
     $fontCount = 0
@@ -531,7 +537,7 @@ Write-Host "`n=== Copying Qt translations (filtered) ===" -ForegroundColor Cyan
 
 # Copy Qt translations with include filter
 $transSrc = Join-Path $SourceDir "translations"
-$transDest = Join-Path $DistDir "translations"
+$transDest = Join-Path $DistSubDir "translations"
 if (Test-Path $transSrc) {
     New-Item -Path $transDest -ItemType Directory -Force | Out-Null
     $transCount = 0
@@ -547,10 +553,10 @@ if (Test-Path $transSrc) {
 
 Write-Host "`n=== Distribution Summary ===" -ForegroundColor Cyan
 
-# Calculate sizes
+# Calculate sizes (only count files in win subdirectory)
 $totalSize = 0
 $fileCount = 0
-Get-ChildItem -Path $DistDir -Recurse -File | ForEach-Object {
+Get-ChildItem -Path $DistSubDir -Recurse -File | ForEach-Object {
     $totalSize += $_.Length
     $fileCount++
 }
@@ -568,7 +574,7 @@ foreach ($dir in $Config.exclude_dirs) {
     }
 }
 
-# Create ZIP archive
+# Create ZIP archive (contents from win subdirectory, output to dist root)
 if (-not $NoZip) {
     Write-Host "`n=== Creating ZIP archive ===" -ForegroundColor Cyan
 
@@ -580,15 +586,15 @@ if (-not $NoZip) {
         Remove-Item -Path $zipPath -Force
     }
 
-    # Create ZIP
-    Compress-Archive -Path "$DistDir\*" -DestinationPath $zipPath -CompressionLevel Optimal
+    # Create ZIP from win subdirectory contents
+    Compress-Archive -Path "$DistSubDir\*" -DestinationPath $zipPath -CompressionLevel Optimal
 
     $zipSize = [math]::Round((Get-Item $zipPath).Length / 1MB, 2)
     Write-Host "Created: $zipName ($zipSize MB)" -ForegroundColor Green
     Write-Host "Location: $zipPath" -ForegroundColor Gray
 }
 
-# Create 7z archive (if 7za/7z is available)
+# Create 7z archive (if 7za/7z is available) - contents from win subdirectory, output to dist root
 if (-not $No7z) {
     $sevenZip = Find-7za
     if (-not $sevenZip) {
@@ -606,9 +612,9 @@ if (-not $No7z) {
             Remove-Item -Path $szPath -Force
         }
 
-        # Create 7z with maximum compression
+        # Create 7z with maximum compression from win subdirectory contents
         # -t7z: 7z format, -mx=9: max compression, -mfb=273: max word size, -ms=on: solid archive
-        $szArgs = @("a", "-t7z", "-mx=9", "-mfb=273", "-ms=on", $szPath, "$DistDir\*")
+        $szArgs = @("a", "-t7z", "-mx=9", "-mfb=273", "-ms=on", $szPath, "$DistSubDir\*")
         $process = Start-Process -FilePath $sevenZip -ArgumentList $szArgs -NoNewWindow -Wait -PassThru
 
         if ($process.ExitCode -ne 0) {
