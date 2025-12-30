@@ -2,7 +2,7 @@
   "app_name": "cr2xt",
   "app_executable": "crqt",
   "bundle_identifier": "com.github.crazycoder.cr2xt",
-  "min_macos_version": "11.0",
+  "min_macos_version": "26.0",
   "fonts": {
     "include": [
       "NotoSans-*.ttf",

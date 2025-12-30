@@ -16,7 +16,7 @@
 #   -j, --jobs N         Number of parallel build jobs (default: auto)
 #   -u, --universal      Build Universal Binary (arm64 + x86_64)
 #   -a, --arch ARCH      Target architecture(s) (default: native, or "arm64;x86_64" for universal)
-#   -m, --macos-target V Minimum macOS version (default: 15.0)
+#   -m, --macos-target V Minimum macOS version (default: from dist-config-macos.json)
 #   -h, --help           Show this help message
 #
 # Environment variables:
@@ -51,7 +51,7 @@ SKIP_DMG=false
 JOBS=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
 UNIVERSAL=false
 TARGET_ARCH=""
-MACOS_TARGET="15.0"
+MACOS_TARGET=""  # Will be set from config or command line
 
 # === Functions ===
 
@@ -116,6 +116,22 @@ json_get_array() {
 
     # Extract items from array, handling quoted strings
     echo "$content" | grep -oE '"[^"]*"' | tr -d '"' | grep -v "^${key}$" | grep -v "^${nested_key}$"
+}
+
+# Parse a simple JSON string value from config file
+# Usage: json_get_value <json_file> <key>
+# Example: json_get_value config.json min_macos_version -> returns "11.0"
+json_get_value() {
+    local json_file="$1"
+    local key="$2"
+
+    if [ ! -f "$json_file" ]; then
+        return 1
+    fi
+
+    # Match "key": "value" and extract value
+    grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$json_file" | \
+        sed -E 's/.*:[[:space:]]*"([^"]*)"/\1/' | head -1
 }
 
 find_macdeployqt() {
@@ -262,6 +278,16 @@ else
     IS_UNIVERSAL=false
 fi
 
+# === Determine macOS Target Version ===
+# Priority: command line arg > config file > hardcoded fallback
+if [ -z "$MACOS_TARGET" ]; then
+    CONFIG_FILE="${SCRIPT_DIR}/dist-config-macos.json"
+    MACOS_TARGET=$(json_get_value "$CONFIG_FILE" "min_macos_version" 2>/dev/null || echo "")
+fi
+if [ -z "$MACOS_TARGET" ]; then
+    MACOS_TARGET="11.0"  # Fallback default
+fi
+
 VERSION=$(get_version)
 echo ""
 log_info "Building ${APP_NAME} version ${VERSION}"
@@ -380,6 +406,129 @@ cleanup_extra_dirs() {
     done
 }
 
+# Bundle and fix all Homebrew dependencies for a binary (recursively)
+# Also fixes @rpath references to bundled libraries
+# Usage: fix_homebrew_dependencies <binary_path> <frameworks_dir> [processed_list_file]
+fix_homebrew_dependencies() {
+    local binary="$1"
+    local fw_dir="$2"
+    local processed_file="${3:-}"
+    local binary_name
+    binary_name=$(basename "$binary")
+
+    # Create temp file to track processed libraries (avoid infinite recursion)
+    if [ -z "$processed_file" ]; then
+        processed_file=$(mktemp)
+        trap "rm -f '$processed_file'" RETURN
+    fi
+
+    # Skip if already processed
+    if grep -qxF "$binary" "$processed_file" 2>/dev/null; then
+        return 0
+    fi
+    echo "$binary" >> "$processed_file"
+
+    # Find all Homebrew dependencies (absolute paths)
+    local deps
+    deps=$(otool -L "$binary" 2>/dev/null | tail -n +2 | awk '{print $1}' | grep "^/opt/homebrew\|^/usr/local/opt" || true)
+
+    # Process each Homebrew dependency
+    local dep dep_name bundled_path
+    for dep in $deps; do
+        dep_name=$(basename "$dep")
+        bundled_path="${fw_dir}/${dep_name}"
+
+        # Copy if not already bundled
+        if [ ! -f "$bundled_path" ] && [ -f "$dep" ]; then
+            cp "$dep" "$bundled_path"
+            chmod 755 "$bundled_path"
+            log_gray "    Bundled: ${dep_name}"
+
+            # Fix the install name of the copied library
+            install_name_tool -id "@executable_path/../Frameworks/${dep_name}" \
+                "$bundled_path" 2>/dev/null || true
+
+            # Sign the copied library
+            codesign --force --sign - "$bundled_path" 2>/dev/null || true
+
+            # Recursively process this library's dependencies
+            fix_homebrew_dependencies "$bundled_path" "$fw_dir" "$processed_file"
+        fi
+
+        # Fix the reference in the original binary
+        install_name_tool -change "$dep" \
+            "@executable_path/../Frameworks/${dep_name}" \
+            "$binary" 2>/dev/null || true
+    done
+
+    # Fix @rpath references - either to bundled libraries or bundle from Homebrew
+    local rpath_deps
+    rpath_deps=$(otool -L "$binary" 2>/dev/null | tail -n +2 | awk '{print $1}' | grep "^@rpath/" | grep -v "framework" || true)
+
+    for dep in $rpath_deps; do
+        dep_name=$(basename "$dep")
+        bundled_path="${fw_dir}/${dep_name}"
+
+        # If not bundled, try to find and copy from Homebrew
+        if [ ! -f "$bundled_path" ]; then
+            local src_path=""
+            # Search common Homebrew locations
+            for search_dir in /opt/homebrew/lib /opt/homebrew/opt/*/lib /usr/local/lib /usr/local/opt/*/lib; do
+                if [ -f "${search_dir}/${dep_name}" ]; then
+                    src_path="${search_dir}/${dep_name}"
+                    break
+                fi
+            done
+
+            if [ -n "$src_path" ] && [ -f "$src_path" ]; then
+                cp "$src_path" "$bundled_path"
+                chmod 755 "$bundled_path"
+                log_gray "    Bundled (rpath): ${dep_name}"
+
+                install_name_tool -id "@executable_path/../Frameworks/${dep_name}" \
+                    "$bundled_path" 2>/dev/null || true
+                codesign --force --sign - "$bundled_path" 2>/dev/null || true
+
+                # Recursively process this library
+                fix_homebrew_dependencies "$bundled_path" "$fw_dir" "$processed_file"
+            fi
+        fi
+
+        # Fix the reference if library is now bundled
+        if [ -f "$bundled_path" ]; then
+            install_name_tool -change "$dep" \
+                "@executable_path/../Frameworks/${dep_name}" \
+                "$binary" 2>/dev/null || true
+        fi
+    done
+}
+
+# Fix all crengine-ng framework dependencies
+# Usage: fix_crengine_dependencies <app_bundle>
+fix_crengine_dependencies() {
+    local bundle="$1"
+    local crengine_bin="${bundle}/Contents/Frameworks/crengine-ng.framework/Versions/A/crengine-ng"
+    local fw_dir="${bundle}/Contents/Frameworks"
+
+    if [ ! -f "$crengine_bin" ]; then
+        return 0
+    fi
+
+    log_gray "  Fixing crengine-ng dependencies..."
+    fix_homebrew_dependencies "$crengine_bin" "$fw_dir"
+
+    # Also fix any bundled dylibs that might have Homebrew references
+    local dylib
+    for dylib in "${fw_dir}"/*.dylib; do
+        if [ -f "$dylib" ]; then
+            fix_homebrew_dependencies "$dylib" "$fw_dir"
+        fi
+    done
+
+    # Re-sign crengine-ng after modifications
+    codesign --force --sign - "$crengine_bin" 2>/dev/null || true
+}
+
 # Copy QtDBus framework and fix library paths
 # Usage: copy_qtdbus_framework <app_bundle> <qt_lib_path>
 copy_qtdbus_framework() {
@@ -387,6 +536,7 @@ copy_qtdbus_framework() {
     local qt_lib_path="$2"
     local qtdbus_dst="${bundle}/Contents/Frameworks/QtDBus.framework"
     local qtdbus_src="${qt_lib_path}/QtDBus.framework"
+    local fw_dir="${bundle}/Contents/Frameworks"
 
     if [ ! -d "${qtdbus_src}" ]; then
         return 0  # QtDBus not available
@@ -417,6 +567,31 @@ copy_qtdbus_framework() {
     # Fix the install name
     install_name_tool -id "@executable_path/../Frameworks/QtDBus.framework/Versions/A/QtDBus" \
         "${qtdbus_dst}/Versions/A/QtDBus" 2>/dev/null || true
+
+    # Find and bundle libdbus dependency (QtDBus links to Homebrew's libdbus)
+    local libdbus_path
+    libdbus_path=$(otool -L "${qtdbus_dst}/Versions/A/QtDBus" 2>/dev/null | grep -o '/.*libdbus[^[:space:]]*' | head -1)
+
+    if [ -n "$libdbus_path" ] && [ -f "$libdbus_path" ]; then
+        local libdbus_name
+        libdbus_name=$(basename "$libdbus_path")
+        log_gray "    Bundling ${libdbus_name}..."
+
+        # Copy libdbus to Frameworks
+        cp "$libdbus_path" "${fw_dir}/${libdbus_name}"
+
+        # Fix libdbus install name
+        install_name_tool -id "@executable_path/../Frameworks/${libdbus_name}" \
+            "${fw_dir}/${libdbus_name}" 2>/dev/null || true
+
+        # Fix QtDBus reference to libdbus
+        install_name_tool -change "$libdbus_path" \
+            "@executable_path/../Frameworks/${libdbus_name}" \
+            "${qtdbus_dst}/Versions/A/QtDBus" 2>/dev/null || true
+
+        # Sign the bundled libdbus
+        codesign --force --sign - "${fw_dir}/${libdbus_name}" 2>/dev/null || true
+    fi
 }
 
 # Fix @rpath references to QtDBus in Qt frameworks
@@ -470,6 +645,9 @@ deploy_qt_to_bundle() {
     # Copy QtDBus framework and fix references
     copy_qtdbus_framework "${bundle}" "${qt_lib_path}"
     fix_qtdbus_references "${bundle}"
+
+    # Fix crengine-ng Homebrew dependencies
+    fix_crengine_dependencies "${bundle}"
 }
 
 # Remove unused frameworks and dylibs based on dist-config-macos.json
@@ -551,6 +729,24 @@ create_universal_frameworks() {
 
             if [ -f "$x86_64_bin" ]; then
                 lipo_combine "$arm64_bin" "$x86_64_bin" "$output_bin"
+            else
+                log_warning "  ${dylib_name}: x86_64 version not found, using arm64 only"
+            fi
+        fi
+    done
+
+    # Check for x86_64-only dylibs (not in arm64 bundle)
+    for dylib in "${x86_64_fw}"/*.dylib; do
+        if [ -f "$dylib" ]; then
+            local dylib_name=$(basename "$dylib")
+            local arm64_bin="${arm64_fw}/${dylib_name}"
+            local output_bin="${output_fw}/${dylib_name}"
+
+            if [ ! -f "$arm64_bin" ]; then
+                log_warning "  ${dylib_name}: arm64 version not found, copying x86_64 only"
+                cp "$dylib" "$output_bin"
+                # Re-sign after copying
+                codesign --force --sign - "$output_bin" 2>/dev/null || true
             fi
         fi
     done
@@ -755,6 +951,11 @@ if ! $SKIP_DEPLOY; then
 
     # Fix @rpath references to QtDBus in Qt frameworks (with signing)
     fix_qtdbus_references "${APP_BUNDLE}" "true"
+
+    # Fix crengine-ng Homebrew dependencies
+    echo ""
+    log_info "Fixing crengine-ng dependencies"
+    fix_crengine_dependencies "${APP_BUNDLE}"
 fi
 
 # === Copy Additional Resources ===
