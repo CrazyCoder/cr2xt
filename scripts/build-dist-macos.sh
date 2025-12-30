@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# build-dist-macos.sh - Build a portable distribution of cr2xt for macOS
+# build-dist-macos.sh - Build distribution of cr2xt for macOS
 #
 # This script packages the cr2xt application into a macOS app bundle
 # and creates a DMG disk image for distribution.
@@ -19,12 +19,7 @@
 #   -a, --arch ARCH      Target architecture(s) (default: native, or "arm64;x86_64" for universal)
 #   -m, --macos-target V Minimum macOS version (default: from dist-config-macos.json)
 #   -h, --help           Show this help message
-#
-# Environment variables:
-#   DEVELOPER_ID         Code signing identity (optional)
-#   APPLE_ID             Apple ID for notarization (optional)
-#   APP_PASSWORD         App-specific password for notarization (optional)
-#   TEAM_ID              Team ID for notarization (optional)
+
 
 set -euo pipefail
 
@@ -32,9 +27,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 APP_NAME="cr2xt"
-BUILD_DIR="${PROJECT_ROOT}/build/release"
-DIST_DIR="${PROJECT_ROOT}/dist/macos"
-APP_BUNDLE="${DIST_DIR}/${APP_NAME}.app"
+# Note: BUILD_DIR, DIST_DIR, APP_BUNDLE are set later based on target architecture
 
 # Colors for output
 RED='\033[0;31m'
@@ -58,7 +51,7 @@ MACOS_TARGET=""  # Will be set from config or command line
 # === Functions ===
 
 print_help() {
-    head -28 "$0" | grep '^#' | sed 's/^# \?//'
+    head -21 "$0" | grep '^#' | sed 's/^# \?//'
 }
 
 log_info() {
@@ -366,14 +359,16 @@ echo ""
 log_info "Building ${APP_NAME} version ${VERSION}"
 echo ""
 log_gray "Project root: ${PROJECT_ROOT}"
-log_gray "Build directory: ${BUILD_DIR}"
-log_gray "Distribution directory: ${DIST_DIR}"
-log_gray "Jobs: ${JOBS}"
 if $IS_UNIVERSAL; then
+    log_gray "Build directories: build/release-arm64, build/release-x86_64"
+    log_gray "Distribution directories: dist/macos-arm64, dist/macos-x86_64, dist/macos-universal"
     log_gray "Architecture: Universal Binary (arm64 + x86_64)"
 else
+    log_gray "Build directory: ${BUILD_DIR}"
+    log_gray "Distribution directory: ${DIST_DIR}"
     log_gray "Architecture: ${TARGET_ARCH}"
 fi
+log_gray "Jobs: ${JOBS}"
 log_gray "macOS target: ${MACOS_TARGET}"
 
 # === Clean ===
@@ -516,7 +511,8 @@ find_homebrew_dylib() {
     )
 }
 
-# Bundle a dylib: copy, fix install name, sign, and recursively process
+# Bundle a dylib: copy, fix install name, and recursively process
+# Note: Signing is deferred to deploy_qt_to_bundle which does a deep sign at the end
 # Usage: bundle_dylib <src_path> <dest_path> <fw_dir> <label> <processed_file>
 bundle_dylib() {
     local src_path="$1"
@@ -533,7 +529,6 @@ bundle_dylib() {
 
     install_name_tool -id "@executable_path/../Frameworks/${dylib_name}" \
         "$dest_path" 2>/dev/null || true
-    codesign --force --sign - "$dest_path" 2>/dev/null || true
 
     # Recursively process this library's dependencies
     fix_homebrew_dependencies "$dest_path" "$fw_dir" "$processed_file"
@@ -610,6 +605,7 @@ fix_homebrew_dependencies() {
 }
 
 # Fix all crengine-ng framework dependencies
+# Note: Signing is deferred to deploy_qt_to_bundle which does a deep sign at the end
 # Usage: fix_crengine_dependencies <app_bundle>
 fix_crengine_dependencies() {
     local bundle="$1"
@@ -630,12 +626,10 @@ fix_crengine_dependencies() {
             fix_homebrew_dependencies "$dylib" "$fw_dir"
         fi
     done
-
-    # Re-sign crengine-ng after modifications
-    codesign --force --sign - "$crengine_bin" 2>/dev/null || true
 }
 
 # Copy QtDBus framework and fix library paths
+# Note: Signing is deferred to deploy_qt_to_bundle which does a deep sign at the end
 # Usage: copy_qtdbus_framework <app_bundle> <qt_lib_path>
 copy_qtdbus_framework() {
     local bundle="$1"
@@ -695,17 +689,14 @@ copy_qtdbus_framework() {
         install_name_tool -change "$libdbus_path" \
             "@executable_path/../Frameworks/${libdbus_name}" \
             "${qtdbus_dst}/Versions/A/QtDBus" 2>/dev/null || true
-
-        # Sign the bundled libdbus
-        codesign --force --sign - "${fw_dir}/${libdbus_name}" 2>/dev/null || true
     fi
 }
 
 # Fix @rpath references to QtDBus in Qt frameworks
-# Usage: fix_qtdbus_references <app_bundle> [sign]
+# Note: Signing is deferred to deploy_qt_to_bundle which does a deep sign at the end
+# Usage: fix_qtdbus_references <app_bundle>
 fix_qtdbus_references() {
     local bundle="$1"
-    local sign="${2:-false}"
 
     for fw in QtGui QtWidgets QtCore; do
         local fw_path="${bundle}/Contents/Frameworks/${fw}.framework/Versions/A/${fw}"
@@ -714,10 +705,6 @@ fix_qtdbus_references() {
                 "@rpath/QtDBus.framework/Versions/A/QtDBus" \
                 "@executable_path/../Frameworks/QtDBus.framework/Versions/A/QtDBus" \
                 "${fw_path}" 2>/dev/null || true
-            # Re-sign after modifying if requested
-            if [ "$sign" = "true" ]; then
-                codesign --force --sign - "${fw_path}" 2>/dev/null || true
-            fi
         fi
     done
 }
@@ -896,8 +883,6 @@ create_universal_frameworks() {
             if [ ! -f "$arm64_bin" ]; then
                 log_warning "  ${dylib_name}: arm64 version not found, copying x86_64 only"
                 cp "$dylib" "$output_bin"
-                # Re-sign after copying
-                codesign --force --sign - "$output_bin" 2>/dev/null || true
             fi
         fi
     done
@@ -920,6 +905,43 @@ create_universal_frameworks() {
     fi
 }
 
+# Build, prepare, and deploy Qt for a single architecture
+# This function encapsulates the complete build pipeline for one architecture
+# Usage: build_and_deploy_arch <arch>
+# Uses architecture to determine:
+#   - Homebrew prefix path (arm64: /opt/homebrew, x86_64: /usr/local)
+#   - Build directory (build/release-<arch>)
+#   - Distribution directory (dist/macos-<arch>)
+build_and_deploy_arch() {
+    local arch="$1"
+    local prefix_path
+    local arch_build_dir="${PROJECT_ROOT}/build/release-${arch}"
+    local arch_dist_dir="${PROJECT_ROOT}/dist/macos-${arch}"
+    local arch_app="${arch_dist_dir}/${APP_NAME}.app"
+
+    # Set Homebrew prefix based on architecture
+    if [ "$arch" = "x86_64" ]; then
+        prefix_path="/usr/local"
+    else
+        prefix_path="/opt/homebrew"
+    fi
+
+    # Build
+    log_info "Building ${arch} architecture"
+    build_single_arch "$arch" "$prefix_path" "$arch_build_dir" "$arch_app"
+
+    # Prepare bundle for Qt deployment
+    relocate_crengine_framework "$arch_app"
+    cleanup_extra_dirs "$arch_app"
+
+    # Deploy Qt
+    echo ""
+    log_info "Deploying Qt to ${arch} bundle"
+    deploy_qt_to_bundle "$arch_app" "$arch"
+
+    echo ""
+}
+
 # === Build ===
 if $BUILD; then
     echo ""
@@ -927,42 +949,12 @@ if $BUILD; then
     if $IS_UNIVERSAL; then
         # Universal Binary: Build each architecture separately, deploy Qt, then combine with lipo
         # This is required because Homebrew libraries are single-architecture
-        ARM64_BUILD_DIR="${PROJECT_ROOT}/build/release-arm64"
-        X86_64_BUILD_DIR="${PROJECT_ROOT}/build/release-x86_64"
-        ARM64_DIST_DIR="${PROJECT_ROOT}/dist/macos-arm64"
-        X86_64_DIST_DIR="${PROJECT_ROOT}/dist/macos-x86_64"
-        ARM64_APP="${ARM64_DIST_DIR}/${APP_NAME}.app"
-        X86_64_APP="${X86_64_DIST_DIR}/${APP_NAME}.app"
+        ARM64_APP="${PROJECT_ROOT}/dist/macos-arm64/${APP_NAME}.app"
+        X86_64_APP="${PROJECT_ROOT}/dist/macos-x86_64/${APP_NAME}.app"
 
-        # Build arm64
-        log_info "Building arm64 architecture"
-        build_single_arch "arm64" "/opt/homebrew" "${ARM64_BUILD_DIR}" "${ARM64_APP}"
+        build_and_deploy_arch "arm64"
+        build_and_deploy_arch "x86_64"
 
-        # Prepare arm64 bundle for Qt deployment
-        relocate_crengine_framework "${ARM64_APP}"
-        cleanup_extra_dirs "${ARM64_APP}"
-
-        # Deploy Qt to arm64 bundle
-        echo ""
-        log_info "Deploying Qt to arm64 bundle"
-        deploy_qt_to_bundle "${ARM64_APP}" "arm64"
-
-        echo ""
-
-        # Build x86_64
-        log_info "Building x86_64 architecture"
-        build_single_arch "x86_64" "/usr/local" "${X86_64_BUILD_DIR}" "${X86_64_APP}"
-
-        # Prepare x86_64 bundle for Qt deployment
-        relocate_crengine_framework "${X86_64_APP}"
-        cleanup_extra_dirs "${X86_64_APP}"
-
-        # Deploy Qt to x86_64 bundle
-        echo ""
-        log_info "Deploying Qt to x86_64 bundle"
-        deploy_qt_to_bundle "${X86_64_APP}" "x86_64"
-
-        echo ""
         log_info "Creating Universal Binary"
 
         # Use arm64 bundle as base (copy to final location)
@@ -994,25 +986,13 @@ if $BUILD; then
 
         log_success "Universal Binary created"
 
-        # Update BUILD_DIR to point to arm64 build for any post-build steps that need it
-        BUILD_DIR="${ARM64_BUILD_DIR}"
-
         # Mark that Qt deployment was already done for Universal builds
         SKIP_DEPLOY=true
 
     else
-        # Single architecture build
-        # CMAKE_PREFIX_PATH is needed for Homebrew libraries (HarfBuzz, WebP, etc.)
-        # Different paths for different architectures:
-        #   - arm64: /opt/homebrew (Apple Silicon Homebrew)
-        #   - x86_64: /usr/local (Intel Homebrew via Rosetta)
-        if [ "$TARGET_ARCH" = "x86_64" ]; then
-            CMAKE_PREFIX_PATHS="/usr/local"
-        else
-            CMAKE_PREFIX_PATHS="/opt/homebrew"
-        fi
-
-        build_single_arch "${TARGET_ARCH}" "${CMAKE_PREFIX_PATHS}" "${BUILD_DIR}" "${APP_BUNDLE}"
+        # Single architecture build - use the same function as universal builds
+        build_and_deploy_arch "${TARGET_ARCH}"
+        SKIP_DEPLOY=true
     fi
 fi
 
@@ -1039,68 +1019,24 @@ if $IS_UNIVERSAL; then
     fi
 fi
 
-# === Fix crengine-ng framework location ===
+# === Fix crengine-ng framework location (for --no-build runs) ===
 # CMake installs the framework to APP_BUNDLE/Library/Frameworks but it needs to be in Contents/Frameworks
+# This is normally handled in the build phase, but we need it here for --no-build scenarios
 if [ -d "${APP_BUNDLE}/Library/Frameworks/crengine-ng.framework" ]; then
     echo ""
     log_info "Relocating crengine-ng framework"
     relocate_crengine_framework "${APP_BUNDLE}"
+    cleanup_extra_dirs "${APP_BUNDLE}"
     log_success "Framework relocated and paths fixed"
 fi
 
-# === Clean up extra installed directories ===
-# CMake installs include/, lib/, share/ which aren't needed in the app bundle
-cleanup_extra_dirs "${APP_BUNDLE}"
-
-# === Qt Deployment ===
+# === Qt Deployment (for --no-build runs) ===
+# This section only runs when BUILD=false and SKIP_DEPLOY=false
+# Normal builds handle Qt deployment in the build phase above
 if ! $SKIP_DEPLOY; then
     echo ""
-
-    # Check if Qt frameworks already deployed (skip for faster rebuilds)
-    QT_CORE_FW="${APP_BUNDLE}/Contents/Frameworks/QtCore.framework"
-    if [ -d "${QT_CORE_FW}" ] && [ ! -L "${QT_CORE_FW}" ]; then
-        log_info "Qt frameworks already deployed, skipping macdeployqt"
-        log_gray "(use --clean to force full redeploy)"
-    else
-        log_info "Running macdeployqt"
-
-        MACDEPLOYQT=$(find_macdeployqt) || {
-            log_error "macdeployqt not found"
-            log_error "Install Qt6: brew install qt@6"
-            log_error "Or add Qt bin directory to PATH"
-            exit 1
-        }
-
-        log_gray "Using: ${MACDEPLOYQT}"
-
-        # Run with reduced verbosity, filter duplicate/noise output
-        "${MACDEPLOYQT}" "${APP_BUNDLE}" -verbose=1 2>&1 | grep -v "^Log:" | grep -v "^  " || true
-
-        log_success "macdeployqt completed"
-    fi
-
-    # Remove unnecessary Qt frameworks from config (pulled in by macdeployqt but not used)
-    apply_framework_exclusions "${APP_BUNDLE}"
-
-    # Determine Qt library path based on target architecture
-    if [ "$TARGET_ARCH" = "x86_64" ]; then
-        QT_LIB_PATH="/usr/local/lib"
-    else
-        QT_LIB_PATH="/opt/homebrew/lib"
-    fi
-
-    # Copy QtDBus framework (required by QtGui on macOS but macdeployqt often creates just a symlink)
-    copy_qtdbus_framework "${APP_BUNDLE}" "${QT_LIB_PATH}"
-    # Sign QtDBus after copying
-    codesign --force --sign - "${APP_BUNDLE}/Contents/Frameworks/QtDBus.framework/Versions/A/QtDBus" 2>/dev/null || true
-
-    # Fix @rpath references to QtDBus in Qt frameworks (with signing)
-    fix_qtdbus_references "${APP_BUNDLE}" "true"
-
-    # Fix crengine-ng Homebrew dependencies
-    echo ""
-    log_info "Fixing crengine-ng dependencies"
-    fix_crengine_dependencies "${APP_BUNDLE}"
+    log_info "Deploying Qt to ${ARCH_SUFFIX} bundle"
+    deploy_qt_to_bundle "${APP_BUNDLE}" "${TARGET_ARCH}"
 fi
 
 # === Copy Additional Resources ===
@@ -1210,71 +1146,19 @@ adhoc_sign_bundle() {
     codesign --force --sign - "${bundle}"
 }
 
-# Always ad-hoc sign if no Developer ID - required on Apple Silicon
-if [ -z "${DEVELOPER_ID:-}" ]; then
-    echo ""
-    log_info "Ad-hoc signing app bundles"
+# Always ad-hoc sign - required on Apple Silicon
+echo ""
+log_info "Ad-hoc signing app bundles"
 
-    if $BUILD_ALL; then
-        adhoc_sign_bundle "${PROJECT_ROOT}/dist/macos-arm64/${APP_NAME}.app" "arm64"
-        adhoc_sign_bundle "${PROJECT_ROOT}/dist/macos-x86_64/${APP_NAME}.app" "x86_64"
-        adhoc_sign_bundle "${PROJECT_ROOT}/dist/macos-universal/${APP_NAME}.app" "universal"
-    else
-        adhoc_sign_bundle "${APP_BUNDLE}" "${ARCH_SUFFIX}"
-    fi
-
-    log_success "Ad-hoc signing completed"
+if $BUILD_ALL; then
+    adhoc_sign_bundle "${PROJECT_ROOT}/dist/macos-arm64/${APP_NAME}.app" "arm64"
+    adhoc_sign_bundle "${PROJECT_ROOT}/dist/macos-x86_64/${APP_NAME}.app" "x86_64"
+    adhoc_sign_bundle "${PROJECT_ROOT}/dist/macos-universal/${APP_NAME}.app" "universal"
+else
+    adhoc_sign_bundle "${APP_BUNDLE}" "${ARCH_SUFFIX}"
 fi
 
-# === Code Signing (with Developer ID) ===
-if [ -n "${DEVELOPER_ID:-}" ]; then
-    echo ""
-    log_info "Code signing with ${DEVELOPER_ID}"
-
-    # Sign all frameworks and dylibs
-    find "${APP_BUNDLE}" -type f \( -name "*.dylib" -o -name "*.framework" \) -exec \
-        codesign --force --sign "${DEVELOPER_ID}" --timestamp {} \; 2>/dev/null || true
-
-    # Sign the main executable
-    codesign --force --sign "${DEVELOPER_ID}" --timestamp \
-        --options runtime \
-        "${APP_BUNDLE}/Contents/MacOS/crqt"
-
-    # Sign the entire bundle
-    codesign --force --sign "${DEVELOPER_ID}" --timestamp \
-        --options runtime \
-        "${APP_BUNDLE}"
-
-    log_success "Code signing completed"
-
-    # Verify signature
-    codesign --verify --verbose "${APP_BUNDLE}" && log_success "Signature verified"
-fi
-
-# === Notarization (Optional) ===
-if [ -n "${APPLE_ID:-}" ] && [ -n "${APP_PASSWORD:-}" ] && [ -n "${TEAM_ID:-}" ]; then
-    echo ""
-    log_info "Submitting for notarization"
-
-    # Create ZIP for notarization
-    NOTARIZE_ZIP="${BUILD_DIR}/${APP_NAME}-notarize.zip"
-    ditto -c -k --keepParent "${APP_BUNDLE}" "${NOTARIZE_ZIP}"
-
-    # Submit for notarization
-    xcrun notarytool submit "${NOTARIZE_ZIP}" \
-        --apple-id "${APPLE_ID}" \
-        --password "${APP_PASSWORD}" \
-        --team-id "${TEAM_ID}" \
-        --wait
-
-    # Staple the notarization ticket
-    xcrun stapler staple "${APP_BUNDLE}"
-
-    log_success "Notarization completed"
-
-    # Clean up
-    rm -f "${NOTARIZE_ZIP}"
-fi
+log_success "Ad-hoc signing completed"
 
 # === Create DMG ===
 if ! $SKIP_DMG; then
