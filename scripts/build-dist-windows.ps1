@@ -573,7 +573,7 @@ if (-not $NoZip) {
     Write-Host "`n=== Creating ZIP archive ===" -ForegroundColor Cyan
 
     $zipName = "$($Config.app_name)-$Version-win64-portable.zip"
-    $zipPath = Join-Path $ProjectRoot $zipName
+    $zipPath = Join-Path $DistDir $zipName
 
     # Remove existing ZIP
     if (Test-Path $zipPath) {
@@ -599,7 +599,7 @@ if (-not $No7z) {
         Write-Host "Using: $sevenZip" -ForegroundColor Gray
 
         $szName = "$($Config.app_name)-$Version-win64-portable.7z"
-        $szPath = Join-Path $ProjectRoot $szName
+        $szPath = Join-Path $DistDir $szName
 
         # Remove existing 7z
         if (Test-Path $szPath) {
