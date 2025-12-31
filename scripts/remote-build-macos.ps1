@@ -272,7 +272,8 @@ if (-not $NoSync) {
     Write-Host "=== Syncing Git Repository ===" -ForegroundColor Cyan
     Write-Host ""
 
-    $syncCommand = "$pathSetup && $cdProject && git pull --ff-only && git submodule update --init --recursive"
+    # Reset any local changes to get clean copies
+    $syncCommand = "$pathSetup && $cdProject && git fetch origin && git reset --hard origin/main && git submodule foreach --recursive git reset --hard && git submodule update --init --recursive --force"
     $result = Invoke-RemoteCommand -Command $syncCommand
 
     if ($result.ExitCode -ne 0) {
