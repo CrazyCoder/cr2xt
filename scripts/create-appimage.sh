@@ -333,8 +333,7 @@ export LD_LIBRARY_PATH="$HERE/usr/lib:$HERE/usr/lib/x86_64-linux-gnu:$LD_LIBRARY
 export QT_PLUGIN_PATH="$HERE/usr/plugins"
 export QT_QPA_PLATFORM_PLUGIN_PATH="$HERE/usr/plugins/platforms"
 # Use xcb (X11) platform by default to avoid wayland plugin warnings
-# User can override with QT_QPA_PLATFORM=wayland if needed
-export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
+export QT_QPA_PLATFORM=xcb
 # Set data paths so crengine finds CSS, fonts, hyph patterns, etc.
 export XDG_DATA_DIRS="$HERE/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 exec "$HERE/usr/bin/cr2xt" "$@"
