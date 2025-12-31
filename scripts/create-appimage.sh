@@ -20,6 +20,7 @@ CLEAN_BUILD=0
 CLEAN_SRC=0
 CLEAN_APPDIR=0
 SKIP_BUILD=0
+NO_SYNC=0
 JOBS=$(nproc)
 
 print_usage() {
@@ -30,6 +31,7 @@ print_usage() {
     echo "  --clean-src     Also remove src directory (triggers fresh git clone)"
     echo "  --clean-appdir  Only remove AppDir (keeps build, useful for re-packaging)"
     echo "  --skip-build    Skip build step, only create AppImage from existing build"
+    echo "  --no-sync       Skip git sync (keeps local source modifications)"
     echo "  -j N            Number of parallel jobs (default: $(nproc))"
     echo "  --qt VERSION    Qt version to use (default: $QT_VERSION)"
     echo "  -h, --help      Show this help"
@@ -78,6 +80,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-build)
             SKIP_BUILD=1
+            shift
+            ;;
+        --no-sync)
+            NO_SYNC=1
             shift
             ;;
         -j)
@@ -182,14 +188,18 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
         rm -rf "$SRC"
         git clone --recursive https://github.com/CrazyCoder/cr2xt.git "$SRC"
     else
-        echo "=== Sources already present, updating ==="
-        cd "$SRC"
-        # Reset any local changes to get clean copies
-        git fetch origin
-        git reset --hard origin/main
-        git submodule foreach --recursive git reset --hard
-        git submodule update --init --recursive --force
-        cd "$ROOT"
+        if [ "$NO_SYNC" -eq 0 ]; then
+            echo "=== Sources already present, updating ==="
+            cd "$SRC"
+            # Reset any local changes to get clean copies
+            git fetch origin
+            git reset --hard origin/main
+            git submodule foreach --recursive git reset --hard
+            git submodule update --init --recursive --force
+            cd "$ROOT"
+        else
+            echo "=== Sources already present, skipping sync (--no-sync) ==="
+        fi
     fi
 
     # Step 2 - Configure (only if not configured or clean build)

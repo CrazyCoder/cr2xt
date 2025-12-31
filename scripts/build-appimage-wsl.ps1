@@ -18,6 +18,9 @@
 .PARAMETER SkipBuild
     Skip CMake build, only create AppImage from existing build (passes --skip-build)
 
+.PARAMETER NoSync
+    Skip git sync, keeps local source modifications (passes --no-sync)
+
 .PARAMETER Jobs
     Number of parallel build jobs (passes -j to build script)
 
@@ -45,6 +48,10 @@
 .EXAMPLE
     .\build-appimage-wsl.ps1 -CleanAppDir
     Clean only AppDir and re-package (keeps compiled binaries)
+
+.EXAMPLE
+    .\build-appimage-wsl.ps1 -NoSync
+    Build without resetting local source modifications (useful for testing changes)
 #>
 
 [CmdletBinding()]
@@ -53,6 +60,7 @@ param(
     [switch]$CleanSrc,
     [switch]$CleanAppDir,
     [switch]$SkipBuild,
+    [switch]$NoSync,
 
     [int]$Jobs = 0,
     [string]$QtVersion = "",
@@ -136,6 +144,7 @@ if ($Clean)       { $buildArgs += "--clean" }
 if ($CleanSrc)    { $buildArgs += "--clean-src" }
 if ($CleanAppDir) { $buildArgs += "--clean-appdir" }
 if ($SkipBuild)   { $buildArgs += "--skip-build" }
+if ($NoSync)      { $buildArgs += "--no-sync" }
 if ($Jobs -gt 0) { $buildArgs += "-j"; $buildArgs += $Jobs.ToString() }
 if ($QtVersion) { $buildArgs += "--qt"; $buildArgs += $QtVersion }
 
