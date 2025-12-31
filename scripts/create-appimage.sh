@@ -225,6 +225,13 @@ make -C "$BUILD" DESTDIR="$APPDIR" install
 # CMake/GNUInstallDirs installs to lib/x86_64-linux-gnu/ on Debian/Ubuntu,
 # but linuxdeploy copies libraries to lib/ - remove duplicates and dev files
 echo "=== Cleaning up development files ==="
+
+# Remove include directory (headers are not needed at runtime)
+if [ -d "$APPDIR/usr/include" ]; then
+    rm -rf "$APPDIR/usr/include"
+    echo "  Removed: include/"
+fi
+
 LIBDIR_ARCH="$APPDIR/usr/lib/x86_64-linux-gnu"
 if [ -d "$LIBDIR_ARCH" ]; then
     # Remove cmake and pkgconfig directories (not needed at runtime)
