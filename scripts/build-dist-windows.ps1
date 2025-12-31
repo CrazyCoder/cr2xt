@@ -505,7 +505,12 @@ foreach ($dir in $Config.include_dirs) {
     $srcPath = Join-Path $SourceDir $dir
     if (Test-Path $srcPath) {
         $destPath = Join-Path $DistSubDir $dir
-        Copy-Item -Path $srcPath -Destination $destPath -Recurse -Force
+        # Create destination directory if it doesn't exist
+        if (-not (Test-Path $destPath)) {
+            New-Item -Path $destPath -ItemType Directory -Force | Out-Null
+        }
+        # Copy contents (not the directory itself) to avoid nesting on re-runs
+        Copy-Item -Path "$srcPath\*" -Destination $destPath -Recurse -Force
         $files = @(Get-ChildItem -Path $destPath -Recurse -File -ErrorAction SilentlyContinue)
         $count = $files.Count
         Write-Host "  + $dir/ ($count files)" -ForegroundColor Gray
