@@ -12,8 +12,7 @@ E-book to XTC format converter based on Cool Reader and crengine.
 The primary purpose of this project is to convert e-books (EPUB, FB2, MOBI, etc.) into bitmap images optimized for ESP32 e-paper display devices such
 as [Xteink X4](https://www.xteink.com/products/xteink-x4).
 
-Xteink X4 is based on ESP32-C3 and only has 400KB RAM, making it challenging to render books with good formatting. The converter renders book pages and exports them to custom container formats (
-XTC/XTCH) containing monochrome or 4-level grayscale images (XTG/XTH).
+Xteink X4 is based on ESP32-C3 and only has 400KB RAM, making it challenging to render books with good formatting. The converter renders book pages and exports them to custom container formats (XTC/XTCH) containing monochrome or 4-level grayscale images (XTG/XTH).
 
 XTC Export dialog supports single file and batch export modes.
 
