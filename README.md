@@ -12,11 +12,12 @@ E-book to XTC format converter based on Cool Reader and crengine.
 The primary purpose of this project is to convert e-books (EPUB, FB2, MOBI, etc.) into bitmap images optimized for ESP32 e-paper display devices such
 as [Xteink X4](https://www.xteink.com/products/xteink-x4).
 
-Xteink X4 is based on ESP32-C3 and only has 400KB RAM, making it challenging to render books with good formatting. The converter renders book pages and exports them to custom container formats (XTC/XTCH) containing monochrome or 4-level grayscale images (XTG/XTH).
+Xteink X4 is based on ESP32-C3 and only has 400KB RAM, making it challenging to render books with good formatting. The converter renders book pages and exports them to custom container formats (
+XTC/XTCH) containing monochrome or 4-level grayscale images (XTG/XTH).
 
 XTC Export dialog supports single file and batch export modes.
 
-<img src="docs/export-single.png" width=50% alt="Single file export dialog"><img src="docs/export-batch.png" width=50% alt="Batch export dialog">
+<img src="docs/export-single.png" alt="Single file export dialog">
 
 ### Supported Input Formats
 
@@ -34,32 +35,34 @@ Also check `*.ksy` files in the same folder for [Kaitai Struct](https://kaitai.i
 
 ## How to Use
 
+- File | **Open** and select your e-book file
+- File | **Settings** (F9) to access formatting and font settings (or Settings from the context menu)
+- View | **Rotate** (Ctrl+R) to change orientation (portrait or landscape)
+- File | **Export** (Ctrl+S) to open the export dialog (or use Export from the context menu)
+
+Export preview supports mouse wheel scrolling and zooming (with Ctrl+Mouse Wheel). Double-click to reset zoom.
+
 ### Windows release builds
 
 Download the latest release version from the [Releases](https://github.com/CrazyCoder/cr2xt/releases) page.
 
 - Unpack and run `crqt.exe`
-- File | **Open** and select your e-book file
-- File | **Settings** (F9) to access formatting and font settings (or Settings from the context menu)
-- File | **Export** (Ctrl+S) to open the export dialog (or use Export from the context menu)
-
-Export preview supports mouse wheel scrolling and zooming (with Ctrl+Mouse Wheel). Double-click to reset zoom.
 
 ### macOS release builds
 
-Download the DMG from the [Releases](https://github.com/CrazyCoder/cr2xt/releases) page.
+Download the DMG from the [Releases](https://github.com/CrazyCoder/cr2xt/releases) page. macOS 26+ is required.
 
 **Important:** The app is ad-hoc signed (not notarized by Apple). macOS Gatekeeper will block it on first run. To open:
 
 1. **Option A** - Right-click method:
-   - Right-click (or Control-click) on `cr2xt.app`
-   - Select **Open** from the context menu
-   - Click **Open** in the dialog that appears
+    - Right-click (or Control-click) on `cr2xt.app`
+    - Select **Open** from the context menu
+    - Click **Open** in the dialog that appears
 
 2. **Option B** - System Settings:
-   - Try to open the app normally (it will be blocked)
-   - Go to **System Settings** → **Privacy & Security**
-   - Scroll down and click **Open Anyway** next to the cr2xt message
+    - Try to open the app normally (it will be blocked)
+    - Go to **System Settings** → **Privacy & Security**
+    - Scroll down and click **Open Anyway** next to the cr2xt message
 
 3. **Option C** - Terminal (removes quarantine flag):
    ```bash
@@ -68,11 +71,18 @@ Download the DMG from the [Releases](https://github.com/CrazyCoder/cr2xt/release
 
 After allowing once, the app will open normally.
 
-Stock firmware renders 2-bit grayscale images too slowly, it's recommended to use 1-bit monochrome mode.
+### Linux release builds
+
+Use the AppImage package from the Releases page. It includes all dependencies and should work on most modern Linux distributions.
+
+
 
 ### Tips
 
-- Try to find a font that looks best without antialiasing (Verdana, Tahoma, Roboto, old fonts with good hinting)
+- Stock English firmware renders 2-bit grayscale images too slowly, it's recommended to use 1-bit monochrome mode. 
+  It has been improved in CN firmware, and it works faster in [CrossPoint](https://github.com/daveallie/crosspoint-reader/) custom firmware
+- For 1-bit mode, try to find a font that looks best without antialiasing (Verdana, Tahoma, Roboto, old fonts with good hinting)
+- For 2-bit mode, make sure to enable antialiasing in Settings | Styles and use Font gamma to control contrast
 - Play with the font size / weight and avoid synthetic weights (Roboto family supports all weights natively)
 - Some fonts work better with Autohinting (Roboto), others work better with Bytecode (Verdana)
 - Adjust page margins and interline spacing to fit as many lines as possible but so that it's still comfortable to read
@@ -80,7 +90,6 @@ Stock firmware renders 2-bit grayscale images too slowly, it's recommended to us
 - Further adjust header navigation bar margins for minimal look
 - Use Settings | Stylesheet to adjust element margins and justification
 - For advanced users, enable "Use expanded CSS file" and edit the `<format>-expanded.css` file, changes will be applied on the fly
-- View | **Rotate** (Ctrl+R) to change orientation (portrait or landscape)
 
 ### Export Dialog Features
 
@@ -121,7 +130,7 @@ This project is a **converter-focused fork** with several key differences:
 - [ ] cr2xt CLI converter
 - [ ] Docker image with CLI converter
 - [x] macOS builds
-- [ ] Linux builds
+- [x] Linux builds
 - [ ] Unofficial compression for XTC format to be used in custom firmwares
 - [ ] New custom XTB format with compression
 
@@ -194,6 +203,8 @@ cmake --build build/release --target install
 
 **Linux:**
 
+Use `scripts/create-appimage.sh` or manually run the following commands:
+
 ```bash
 cmake -B build/release \
     -DCMAKE_BUILD_TYPE=Release \
@@ -203,6 +214,9 @@ cmake -B build/release \
 
 cmake --build build/release -j$(nproc)
 ```
+
+You will need to install dependencies for crengine.
+
 
 ## License
 
