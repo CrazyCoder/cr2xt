@@ -408,11 +408,21 @@ build_single_arch() {
     local build_dir="$3"
     local install_prefix="$4"
 
+    # Set PKG_CONFIG_PATH for the target architecture to ensure pkg-config
+    # finds the correct libraries (arm64 in /opt/homebrew, x86_64 in /usr/local)
+    local pkg_config_path
+    if [ "$arch" = "x86_64" ]; then
+        pkg_config_path="/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig"
+    else
+        pkg_config_path="/opt/homebrew/lib/pkgconfig:/opt/homebrew/share/pkgconfig"
+    fi
+
     log_info "Configuring CMake for ${arch}"
     log_gray "  Build dir: ${build_dir}"
     log_gray "  Prefix path: ${prefix_path}"
+    log_gray "  PKG_CONFIG_PATH: ${pkg_config_path}"
 
-    cmake -B "${build_dir}" -G Ninja -S "${PROJECT_ROOT}" \
+    PKG_CONFIG_PATH="${pkg_config_path}" cmake -B "${build_dir}" -G Ninja -S "${PROJECT_ROOT}" \
         -DCMAKE_BUILD_TYPE=Release \
         -DUSE_QT=QT6 \
         -DUSE_COLOR_BACKBUFFER=OFF \
@@ -946,10 +956,14 @@ build_and_deploy_arch() {
     relocate_crengine_framework "$arch_app"
     cleanup_extra_dirs "$arch_app"
 
-    # Deploy Qt
-    echo ""
-    log_info "Deploying Qt to ${arch} bundle"
-    deploy_qt_to_bundle "$arch_app" "$arch"
+    # Deploy Qt (unless --skip-deploy was specified)
+    if ! $SKIP_DEPLOY; then
+        echo ""
+        log_info "Deploying Qt to ${arch} bundle"
+        deploy_qt_to_bundle "$arch_app" "$arch"
+    else
+        log_gray "  Skipping Qt deployment (--skip-deploy)"
+    fi
 
     echo ""
 }
