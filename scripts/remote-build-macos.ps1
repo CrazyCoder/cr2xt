@@ -372,3 +372,4 @@ foreach ($remoteDmg in $dmgsToDownload) {
 Write-Host ""
 Write-Host "=== Done ===" -ForegroundColor Green
 Write-Host "Artifacts saved to: $LOCAL_DIST_PATH" -ForegroundColor Gray
+exit 0
