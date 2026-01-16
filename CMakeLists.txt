@@ -4,7 +4,7 @@ project(cr2xt)
 # cr2xt version
 set(CR2XT_VERSION_MAJOR 0)
 set(CR2XT_VERSION_MINOR 9)
-set(CR2XT_VERSION_PATCH 1)
+set(CR2XT_VERSION_PATCH 2)
 set(CR2XT_VERSION "${CR2XT_VERSION_MAJOR}.${CR2XT_VERSION_MINOR}.${CR2XT_VERSION_PATCH}")
 
 # Get git version information (tag or short hash)
