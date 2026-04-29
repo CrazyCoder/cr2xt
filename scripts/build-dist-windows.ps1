@@ -416,7 +416,7 @@ if (-not $SkipMingwDlls) {
                 $dllList = & $python $bundledllsScript $AppExe 2>&1
                 if ($LASTEXITCODE -ne 0) {
                     Write-Warning "mingw-bundledlls failed with exit code $LASTEXITCODE"
-                    Write-Warning $dllList
+                    Write-Warning ($dllList -join "`n")
                 }
                 else {
                     $dllPaths = $dllList -split "`n" | Where-Object { $_ -and $_.Trim() }
