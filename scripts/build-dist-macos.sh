@@ -4,6 +4,7 @@
 #
 # This script packages the cr2xt application into a macOS app bundle
 # and creates a DMG disk image for distribution.
+# Used by CI (.github/workflows/build.yml) and by local/remote builds.
 #
 # Usage:
 #   ./build-dist-macos.sh [options]
@@ -54,7 +55,7 @@ MERGE_ONLY=false # Merge existing per-arch bundles, no build
 # === Functions ===
 
 print_help() {
-    head -23 "$0" | grep '^#' | sed 's/^# \?//'
+    head -24 "$0" | grep '^#' | sed 's/^# \?//'
 }
 
 log_info() {

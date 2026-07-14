@@ -3,12 +3,27 @@
     Automate the cr2xt release pipeline: version bump, build, verify, release, upload.
 
 .DESCRIPTION
+    Default release flow (CI): run only the VersionBump stage. Pushing the
+    v*.*.* tag triggers .github/workflows/release.yml, which builds all
+    platforms on GitHub Actions and creates a draft release with the
+    artifacts attached:
+
+      .\release.ps1 -Only VersionBump -Bump patch -Yes
+
+    The remaining stages run the LOCAL build pipeline (build-dist-all.ps1:
+    AppImage via WSL, macOS DMG via SSH, Windows portable via MSYS2) and are
+    kept as a fallback for when CI is unavailable. Do not run them for a tag
+    CI is already building: they race with CI's publish job over the draft
+    release, and Upload overwrites CI's assets (--clobber). Note that the
+    local macOS DMG targets the build Mac's own OS version (see
+    dist-config-macos.json), unlike CI's macOS 15 baseline.
+
     Five-stage linear pipeline with resumability via -StartFrom:
-      1. VersionBump - Update CMakeLists.txt, commit, tag, push
-      2. Build       - Run build-dist-all.ps1 with smart artifact skipping
-      3. Verify      - Check dist/ artifacts for completeness
-      4. Release     - Create draft GitHub release with notes
-      5. Upload      - Upload artifacts to the GitHub release
+      1. VersionBump - Update CMakeLists.txt, commit, tag, push (CI takes over here)
+      2. Build       - [local fallback] Run build-dist-all.ps1 with smart artifact skipping
+      3. Verify      - [local fallback] Check dist/ artifacts for completeness
+      4. Release     - [local fallback] Create draft GitHub release with notes
+      5. Upload      - [local fallback] Upload artifacts to the GitHub release
 
     Each stage prints a resume command on failure.
 
@@ -55,12 +70,16 @@
     Path to a .md file for release notes. Default: .claude/docs/release-v{version}.md.
 
 .EXAMPLE
+    .\release.ps1 -Only VersionBump -Bump patch -Yes
+    Standard release: bump + tag + push; CI builds and drafts the release.
+
+.EXAMPLE
     .\release.ps1 -Version 0.9.3
-    Full release pipeline for version 0.9.3.
+    Full local release pipeline for version 0.9.3 (CI fallback).
 
 .EXAMPLE
     .\release.ps1 -Bump patch
-    Auto-increment patch version and run full pipeline.
+    Auto-increment patch version and run full local pipeline (CI fallback).
 
 .EXAMPLE
     .\release.ps1 -StartFrom Build
@@ -428,6 +447,21 @@ if (Should-RunStage "VersionBump") {
 
 if (Should-RunStage "Build") {
     Write-StageHeader "Stage 2/5: Build"
+
+    # The tag pushed in VersionBump already triggered the CI release workflow
+    # (.github/workflows/release.yml). Building locally as well races with
+    # CI's publish job and overwrites its assets on Upload (--clobber).
+    if ((Should-RunStage "VersionBump") -and -not $DryRun) {
+        Write-Host "  WARNING: the v$targetVersion tag push already triggered the CI release build." -ForegroundColor Yellow
+        Write-Host "  Continuing runs the LOCAL fallback pipeline and will overwrite CI's draft assets." -ForegroundColor Yellow
+        if (-not $Yes) {
+            $confirm = Read-Host "  Continue with local build anyway? [y/N]"
+            if ($confirm -notmatch '^[Yy]') {
+                Write-Host "  Stopping after VersionBump. CI will produce the draft release." -ForegroundColor DarkGray
+                exit 0
+            }
+        }
+    }
 
     $gitHash = Get-GitHash
     $distDir = Join-Path $ProjectRoot "dist"

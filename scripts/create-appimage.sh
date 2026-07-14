@@ -1,4 +1,6 @@
 #!/bin/bash
+# Build the cr2xt Linux AppImage. Used by CI (.github/workflows/build.yml,
+# via --src) and locally via build-appimage-wsl.ps1 (clones into ./src).
 set -e
 
 APP=cr2xt

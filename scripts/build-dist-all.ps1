@@ -9,6 +9,11 @@
     - remote-build-macos.ps1 (macOS DMG via SSH)
     - build-dist-windows.ps1 (Windows portable archive)
 
+    This is the LOCAL build path (WSL, SSH to a Mac, local MSYS2), used for
+    iteration and as a fallback. Release builds normally run on GitHub
+    Actions (.github/workflows/build.yml), which calls the platform build
+    scripts directly on hosted runners.
+
 .PARAMETER SkipLinux
     Skip the Linux AppImage build
 

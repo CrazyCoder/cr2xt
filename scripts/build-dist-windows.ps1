@@ -8,6 +8,8 @@
     distribution with selected fonts, translations, and dependencies.
     It runs windeployqt6 to ensure Qt dependencies are up to date.
 
+    Used both locally and by CI (.github/workflows/build.yml, with -Build).
+
 .PARAMETER SourceDir
     Path to the installed application (default: ..\cr-conv)
 

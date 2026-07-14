@@ -6,6 +6,11 @@
     This script connects to a remote macOS machine via SSH, runs the build-dist-macos.sh
     script, and downloads the resulting DMG artifact if one was created.
 
+    Local iteration/fallback path: release DMGs are normally built by CI
+    (.github/workflows/build.yml) on macos-15 runners with a macOS 15 deployment
+    target. DMGs built via this script target the remote Mac's configured
+    deployment target (dist-config-macos.json) and may require a newer macOS.
+
 .PARAMETER Arch
     Target architecture: "arm64", "x86_64", "universal", or "all".
     Maps to build script options: -a/--arch, -u/--universal, -A/--all

@@ -6,6 +6,10 @@
     This script copies the build scripts to the WSL build directory, runs the
     create-appimage.sh script in WSL, and downloads the resulting AppImage artifact.
 
+    Local iteration/fallback path: release AppImages are normally built by CI
+    (.github/workflows/build.yml), which runs create-appimage.sh --src directly
+    on an ubuntu-22.04 runner.
+
 .PARAMETER Clean
     Run clean build (passes --clean to build script). Does NOT delete src directory.
 
