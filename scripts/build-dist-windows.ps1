@@ -503,6 +503,18 @@ foreach ($pattern in $Config.root_files.include) {
     }
 }
 
+# Ensure portable-mode marker and Qt path config exist (SourceDir may lack them, e.g. fresh CI install)
+$portableMark = Join-Path $DistSubDir "portable.mark"
+if (-not (Test-Path $portableMark)) {
+    New-Item -Path $portableMark -ItemType File | Out-Null
+    Write-Host "  + portable.mark (generated)" -ForegroundColor Gray
+}
+$qtConf = Join-Path $DistSubDir "qt.conf"
+if (-not (Test-Path $qtConf)) {
+    Set-Content -Path $qtConf -Value "[Paths]`r`nPrefix=." -NoNewline
+    Write-Host "  + qt.conf (generated)" -ForegroundColor Gray
+}
+
 Write-Host "`n=== Copying directories ===" -ForegroundColor Cyan
 
 # Copy included directories (full copy)
