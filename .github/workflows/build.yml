@@ -70,6 +70,7 @@ jobs:
             mingw-w64-x86_64-libutf8proc
             mingw-w64-x86_64-libunibreak
             mingw-w64-x86_64-libjxl
+            mingw-w64-x86_64-fontconfig
             mingw-w64-x86_64-zlib
 
       - name: Build and package
