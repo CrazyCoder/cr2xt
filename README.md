@@ -49,7 +49,7 @@ Download the latest release version from the [Releases](https://github.com/Crazy
 
 ### macOS release builds
 
-Download the DMG from the [Releases](https://github.com/CrazyCoder/cr2xt/releases) page. macOS 26+ is required.
+Download the DMG from the [Releases](https://github.com/CrazyCoder/cr2xt/releases) page. macOS 15 (Sequoia) or later is required. The universal DMG supports both Intel and Apple Silicon Macs.
 
 **Important:** The app is ad-hoc signed (not notarized by Apple). macOS Gatekeeper will block it on first run. To open:
 
@@ -135,87 +135,9 @@ This project is a **converter-focused fork** with several key differences:
 
 ## Building
 
-The project requires:
-
-- Qt6 (Core, Gui, Widgets modules)
-- CMake 3.16+
-- C++17 compatible compiler
-- freetype / fontconfig and other dependencies for crengine
-
-**Windows (MSYS2/MinGW64):**
-
-Use `scripts/build-dist-windows.ps1` or manually run the following commands:
-
-```bash
-# Configure
-cmake -B build/release -G Ninja \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DUSE_QT=QT6 \
-    -DUSE_COLOR_BACKBUFFER=OFF \
-    -DGRAY_BACKBUFFER_BITS=2
-
-# Build
-cmake --build build/release --target all -j$(nproc)
-
-# Install
-cmake --build build/release --target install
-```
-
-**macOS:**
-
-Install dependencies via Homebrew:
-
-```bash
-brew install cmake qt@6 freetype harfbuzz libpng jpeg-turbo webp fribidi zstd utf8proc fontconfig create-dmg
-```
-
-Use `scripts/build-dist-macos.sh` to build and create a DMG:
-
-```bash
-# Full build with DMG creation
-./scripts/build-dist-macos.sh --clean
-
-# Build only (skip DMG)
-./scripts/build-dist-macos.sh --clean --skip-dmg
-
-# Universal Binary (Intel + Apple Silicon)
-./scripts/build-dist-macos.sh --clean --universal
-```
-
-Or build manually:
-
-```bash
-# Configure
-cmake -B build/release \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_PREFIX_PATH=/opt/homebrew \
-    -DUSE_QT=QT6 \
-    -DUSE_COLOR_BACKBUFFER=OFF \
-    -DGRAY_BACKBUFFER_BITS=2
-
-# Build
-cmake --build build/release -j$(sysctl -n hw.ncpu)
-
-# Install to dist/macos
-cmake --build build/release --target install
-```
-
-**Linux:**
-
-Use `scripts/create-appimage.sh` or manually run the following commands:
-
-```bash
-cmake -B build/release \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DUSE_QT=QT6 \
-    -DUSE_COLOR_BACKBUFFER=OFF \
-    -DGRAY_BACKBUFFER_BITS=2
-
-cmake --build build/release -j$(nproc)
-```
-
-You will need to install dependencies for crengine.
-
+See [BUILD.md](BUILD.md) for build instructions for all platforms (Windows
+MSYS2/MinGW64, Linux + AppImage, macOS incl. universal binaries) and for how
+release artifacts are built on GitHub Actions.
 
 ## License
 
