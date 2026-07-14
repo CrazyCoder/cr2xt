@@ -16,7 +16,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: '{windows-portable,linux-appimage,macos-dmgs}'
           path: artifacts
