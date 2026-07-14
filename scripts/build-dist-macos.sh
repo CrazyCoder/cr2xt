@@ -185,6 +185,25 @@ create_dmg_for_bundle() {
     mkdir -p "${PROJECT_ROOT}/dist"
     rm -f "${dmg_path}"
 
+    # Prefer dmgbuild (headless pretty DMG, no Finder needed - works on CI)
+    if command -v dmgbuild &>/dev/null; then
+        local dmgbuild_args=(-s "${SCRIPT_DIR}/dmg-settings.py"
+                             -D "app=${bundle}"
+                             -D "volicon=${bundle}/Contents/Resources/crqt.icns")
+        local dmgbuild_bg="${PROJECT_ROOT}/assets/dmg-background.png"
+        if [ -f "$dmgbuild_bg" ]; then
+            dmgbuild_args+=(-D "background=${dmgbuild_bg}")
+        fi
+        if dmgbuild "${dmgbuild_args[@]}" "${APP_NAME} ${version}" "${dmg_path}" \
+                && [ -f "${dmg_path}" ]; then
+            local dmg_size
+            dmg_size=$(du -h "${dmg_path}" | cut -f1)
+            log_success "  ${dmg_name}.dmg (${dmg_size}, dmgbuild)"
+            return 0
+        fi
+        log_warning "dmgbuild failed, falling back to create-dmg/hdiutil"
+    fi
+
     if CREATE_DMG=$(find_create_dmg); then
         # Build create-dmg arguments
         local dmg_args=(
