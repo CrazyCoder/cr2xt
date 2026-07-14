@@ -522,8 +522,11 @@ foreach ($dir in $Config.include_dirs) {
 
 Write-Host "`n=== Copying fonts (filtered) ===" -ForegroundColor Cyan
 
-# Copy fonts with include filter
+# Copy fonts with include filter (fall back to repo fonts when SourceDir has none, e.g. on CI)
 $fontsSrc = Join-Path $SourceDir "fonts"
+if (-not (Test-Path $fontsSrc)) {
+    $fontsSrc = Join-Path $ProjectRoot "fonts"
+}
 $fontsDest = Join-Path $DistSubDir "fonts"
 if (Test-Path $fontsSrc) {
     New-Item -Path $fontsDest -ItemType Directory -Force | Out-Null
