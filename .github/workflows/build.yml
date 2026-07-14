@@ -36,6 +36,10 @@ on:
 
 env:
   QT_VERSION_LINUX: "6.11.0"
+  CMAKE_C_COMPILER_LAUNCHER: ccache
+  CMAKE_CXX_COMPILER_LAUNCHER: ccache
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_MAXSIZE: 800M
 
 jobs:
   windows:
@@ -55,6 +59,7 @@ jobs:
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-ccache
             mingw-w64-x86_64-python
             mingw-w64-x86_64-qt6-base
             mingw-w64-x86_64-qt6-tools
@@ -72,6 +77,14 @@ jobs:
             mingw-w64-x86_64-libjxl
             mingw-w64-x86_64-fontconfig
             mingw-w64-x86_64-zlib
+
+      - name: Cache ccache
+        if: startsWith(inputs.windows_runner || 'windows-latest', 'windows-')
+        uses: actions/cache@v6
+        with:
+          path: .ccache
+          key: ccache-windows-${{ github.sha }}
+          restore-keys: ccache-windows-
 
       - name: Build and package
         shell: pwsh
@@ -101,7 +114,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential cmake python3-pip wget file \
+            build-essential cmake ccache python3-pip wget file \
             libfreetype-dev libharfbuzz-dev libpng-dev libjpeg-turbo8-dev \
             libwebp-dev libfribidi-dev libzstd-dev libutf8proc-dev libunibreak-dev \
             libfontconfig1-dev zlib1g-dev libgl1-mesa-dev libxkbcommon-dev \
@@ -115,6 +128,14 @@ jobs:
         with:
           path: ${{ runner.temp }}/appimage-root/Qt
           key: qt-linux-${{ env.QT_VERSION_LINUX }}
+
+      - name: Cache ccache
+        if: startsWith(inputs.linux_runner || 'ubuntu-22.04', 'ubuntu-')
+        uses: actions/cache@v6
+        with:
+          path: .ccache
+          key: ccache-linux-${{ github.sha }}
+          restore-keys: ccache-linux-
 
       - name: Build AppImage
         run: |
@@ -156,8 +177,16 @@ jobs:
       - name: Install dependencies (Homebrew)
         if: startsWith(matrix.runner, 'macos-')
         run: >-
-          brew install ninja qt@6 freetype harfbuzz libpng jpeg-turbo webp
+          brew install ninja ccache qt@6 freetype harfbuzz libpng jpeg-turbo webp
           fribidi zstd utf8proc libunibreak jpeg-xl fontconfig dbus
+
+      - name: Cache ccache
+        if: startsWith(matrix.runner, 'macos-')
+        uses: actions/cache@v6
+        with:
+          path: .ccache
+          key: ccache-macos-${{ matrix.arch }}-${{ github.sha }}
+          restore-keys: ccache-macos-${{ matrix.arch }}-
 
       - name: Build ${{ matrix.arch }}
         run: ./scripts/build-dist-macos.sh -a ${{ matrix.arch }} -m 15.0 --skip-dmg -j "$(sysctl -n hw.ncpu)"
