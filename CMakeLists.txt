@@ -4,7 +4,7 @@ project(cr2xt)
 # cr2xt version
 set(CR2XT_VERSION_MAJOR 0)
 set(CR2XT_VERSION_MINOR 9)
-set(CR2XT_VERSION_PATCH 3)
+set(CR2XT_VERSION_PATCH 4)
 set(CR2XT_VERSION "${CR2XT_VERSION_MAJOR}.${CR2XT_VERSION_MINOR}.${CR2XT_VERSION_PATCH}")
 
 # Get git version information (short commit hashes for parent and submodules)
