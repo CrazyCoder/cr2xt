@@ -229,6 +229,7 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
           -DUSE_QT=QT6 \
           -DUSE_COLOR_BACKBUFFER=OFF \
           -DGRAY_BACKBUFFER_BITS=2 \
+          -DWITH_LIBUNIBREAK=ON \
           -DCRE_BUILD_SHARED=ON \
           -DCRE_BUILD_STATIC=OFF
     fi

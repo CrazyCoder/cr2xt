@@ -116,12 +116,24 @@ jobs:
           sudo apt-get install -y \
             build-essential cmake ccache python3-pip wget file \
             libfreetype-dev libharfbuzz-dev libpng-dev libjpeg-turbo8-dev \
-            libwebp-dev libfribidi-dev libzstd-dev libutf8proc-dev libunibreak-dev \
+            libwebp-dev libfribidi-dev libzstd-dev libutf8proc-dev \
             libfontconfig1-dev zlib1g-dev libgl1-mesa-dev libxkbcommon-dev \
             libfuse2 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
             libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
             libxcb-shape0 libxcb-sync1 libxcb-xfixes0 libxcb-xinerama0 \
             libxcb-xkb1 libxcb-glx0 libxcb-util1
+
+      - name: Build libunibreak from source (Ubuntu 22.04 packages only ancient 1.1)
+        if: startsWith(inputs.linux_runner || 'ubuntu-22.04', 'ubuntu-')
+        run: |
+          cd "$RUNNER_TEMP"
+          wget -q https://github.com/adah1972/libunibreak/releases/download/libunibreak_6_1/libunibreak-6.1.tar.gz
+          tar xzf libunibreak-6.1.tar.gz
+          cd libunibreak-6.1
+          ./configure --prefix=/usr/local >/dev/null
+          make -j"$(nproc)" >/dev/null
+          sudo make install >/dev/null
+          sudo ldconfig
 
       - name: Cache Qt
         uses: actions/cache@v6
