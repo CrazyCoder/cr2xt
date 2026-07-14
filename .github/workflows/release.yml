@@ -33,6 +33,6 @@ jobs:
           fi
           gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber \
             artifacts/*.AppImage \
-            artifacts/*-macos-universal.dmg \
+            artifacts/*.dmg \
             artifacts/*.zip \
             artifacts/*.7z

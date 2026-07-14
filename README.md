@@ -49,7 +49,11 @@ Download the latest release version from the [Releases](https://github.com/Crazy
 
 ### macOS release builds
 
-Download the DMG from the [Releases](https://github.com/CrazyCoder/cr2xt/releases) page. macOS 15 (Sequoia) or later is required. The universal DMG supports both Intel and Apple Silicon Macs.
+Download a DMG from the [Releases](https://github.com/CrazyCoder/cr2xt/releases) page. macOS 15 (Sequoia) or later is required. Three variants are available:
+
+- `macos-universal` - works on both Intel and Apple Silicon Macs (larger download)
+- `macos-arm64` - Apple Silicon only (smaller)
+- `macos-x86_64` - Intel only (smaller)
 
 **Important:** The app is ad-hoc signed (not notarized by Apple). macOS Gatekeeper will block it on first run. To open:
 
