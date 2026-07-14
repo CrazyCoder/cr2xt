@@ -99,14 +99,19 @@ if (-not (Test-Path $ConfigPath)) {
 $Config = Get-Content $ConfigPath -Raw | ConvertFrom-Json
 Write-Host "Loaded configuration from: $ConfigPath" -ForegroundColor Cyan
 
-# Validate source directory
+# Validate source directory (with -Build, the install step creates it later)
 if (-not (Test-Path $SourceDir)) {
-    Write-Error "Source directory not found: $SourceDir"
-    exit 1
+    if ($Build) {
+        New-Item -Path $SourceDir -ItemType Directory -Force | Out-Null
+    }
+    else {
+        Write-Error "Source directory not found: $SourceDir"
+        exit 1
+    }
 }
 
 $AppExe = Join-Path $SourceDir $Config.app_executable
-if (-not (Test-Path $AppExe)) {
+if (-not (Test-Path $AppExe) -and -not $Build) {
     Write-Error "Application executable not found: $AppExe"
     exit 1
 }
