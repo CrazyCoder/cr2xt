@@ -41,7 +41,7 @@ jobs:
   windows:
     runs-on: ${{ inputs.windows_runner || 'windows-latest' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -81,7 +81,7 @@ jobs:
           New-Item -ItemType Directory -Force $src | Out-Null
           .\scripts\build-dist-windows.ps1 -Build -Msys2Root $msysRoot -SourceDir $src
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-portable
           path: |
@@ -92,7 +92,7 @@ jobs:
   linux:
     runs-on: ${{ inputs.linux_runner || 'ubuntu-22.04' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -108,7 +108,7 @@ jobs:
             libfuse2 libxcb-cursor0
 
       - name: Cache Qt
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/appimage-root/Qt
           key: qt-linux-${{ env.QT_VERSION_LINUX }}
@@ -123,7 +123,7 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/dist"
           cp cr2xt-*.AppImage "$GITHUB_WORKSPACE/dist/"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-appimage
           path: dist/*.AppImage
@@ -140,7 +140,7 @@ jobs:
             runner: ${{ inputs.macos_intel_runner || 'macos-15-intel' }}
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -162,7 +162,7 @@ jobs:
       - name: Tar app bundle (preserve symlinks)
         run: tar -C "dist/macos-${{ matrix.arch }}" -czf "cr2xt-app-${{ matrix.arch }}.tar.gz" cr2xt.app
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-app-${{ matrix.arch }}
           path: cr2xt-app-${{ matrix.arch }}.tar.gz
@@ -172,7 +172,7 @@ jobs:
     needs: macos
     runs-on: ${{ inputs.macos_arm_runner || 'macos-15' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Add Homebrew and local bins to PATH (self-hosted runners have a minimal PATH)
         run: |
@@ -185,7 +185,7 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           command -v dmgbuild >/dev/null 2>&1 || pipx install dmgbuild
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: macos-app-*
           path: apptars
@@ -206,7 +206,7 @@ jobs:
           echo "Architectures: $archs"
           [[ "$archs" == *arm64* && "$archs" == *x86_64* ]]
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-dmgs
           path: dist/*.dmg
