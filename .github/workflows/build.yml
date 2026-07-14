@@ -1,0 +1,197 @@
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      linux_runner:
+        description: Linux runner label
+        type: string
+        default: ubuntu-22.04
+      windows_runner:
+        description: Windows runner label
+        type: string
+        default: windows-latest
+      macos_arm_runner:
+        description: macOS arm64 runner label
+        type: string
+        default: macos-15
+      macos_intel_runner:
+        description: macOS x86_64 runner label
+        type: string
+        default: macos-15-intel
+  workflow_call:
+    inputs:
+      linux_runner:
+        type: string
+        default: ubuntu-22.04
+      windows_runner:
+        type: string
+        default: windows-latest
+      macos_arm_runner:
+        type: string
+        default: macos-15
+      macos_intel_runner:
+        type: string
+        default: macos-15-intel
+
+env:
+  QT_VERSION_LINUX: "6.11.0"
+
+jobs:
+  windows:
+    runs-on: ${{ inputs.windows_runner || 'windows-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up MSYS2
+        if: startsWith(inputs.windows_runner || 'windows-latest', 'windows-')
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          location: C:\ci-msys2
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-python
+            mingw-w64-x86_64-qt6-base
+            mingw-w64-x86_64-qt6-tools
+            mingw-w64-x86_64-qt6-translations
+            mingw-w64-x86_64-qt6-imageformats
+            mingw-w64-x86_64-freetype
+            mingw-w64-x86_64-harfbuzz
+            mingw-w64-x86_64-libpng
+            mingw-w64-x86_64-libjpeg-turbo
+            mingw-w64-x86_64-libwebp
+            mingw-w64-x86_64-fribidi
+            mingw-w64-x86_64-zstd
+            mingw-w64-x86_64-libutf8proc
+            mingw-w64-x86_64-zlib
+
+      - name: Build and package
+        shell: pwsh
+        run: |
+          $msysRoot = if (Test-Path 'C:\ci-msys2\msys64') { 'C:\ci-msys2\msys64' } else { 'C:\tools\msys64' }
+          $src = Join-Path $env:RUNNER_TEMP 'cr-conv'
+          .\scripts\build-dist-windows.ps1 -Build -Msys2Root $msysRoot -SourceDir $src
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-portable
+          path: |
+            dist/*.zip
+            dist/*.7z
+          if-no-files-found: error
+
+  linux:
+    runs-on: ${{ inputs.linux_runner || 'ubuntu-22.04' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        if: startsWith(inputs.linux_runner || 'ubuntu-22.04', 'ubuntu-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake python3-pip wget file \
+            libfreetype-dev libharfbuzz-dev libpng-dev libjpeg-turbo8-dev \
+            libwebp-dev libfribidi-dev libzstd-dev libutf8proc-dev \
+            libfontconfig1-dev zlib1g-dev libgl1-mesa-dev libxkbcommon-dev \
+            libfuse2 libxcb-cursor0
+
+      - name: Cache Qt
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/appimage-root/Qt
+          key: qt-linux-${{ env.QT_VERSION_LINUX }}
+
+      - name: Build AppImage
+        run: |
+          mkdir -p "$RUNNER_TEMP/appimage-root"
+          cd "$RUNNER_TEMP/appimage-root"
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          export QT_VERSION="$QT_VERSION_LINUX"
+          "$GITHUB_WORKSPACE/scripts/create-appimage.sh" --src "$GITHUB_WORKSPACE" -j "$(nproc)"
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp cr2xt-*.AppImage "$GITHUB_WORKSPACE/dist/"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: dist/*.AppImage
+          if-no-files-found: error
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: ${{ inputs.macos_arm_runner || 'macos-15' }}
+          - arch: x86_64
+            runner: ${{ inputs.macos_intel_runner || 'macos-15-intel' }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies (Homebrew)
+        if: startsWith(matrix.runner, 'macos-')
+        run: >-
+          brew install ninja qt@6 freetype harfbuzz libpng jpeg-turbo webp
+          fribidi zstd utf8proc fontconfig dbus
+
+      - name: Build ${{ matrix.arch }}
+        run: ./scripts/build-dist-macos.sh -a ${{ matrix.arch }} -m 15.0 --skip-dmg -j "$(sysctl -n hw.ncpu)"
+
+      - name: Tar app bundle (preserve symlinks)
+        run: tar -C "dist/macos-${{ matrix.arch }}" -czf "cr2xt-app-${{ matrix.arch }}.tar.gz" cr2xt.app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-app-${{ matrix.arch }}
+          path: cr2xt-app-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+
+  macos-universal:
+    needs: macos
+    runs-on: ${{ inputs.macos_arm_runner || 'macos-15' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dmgbuild
+        run: |
+          command -v dmgbuild >/dev/null 2>&1 || pipx install dmgbuild
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: macos-app-*
+          path: apptars
+          merge-multiple: true
+
+      - name: Unpack per-arch bundles
+        run: |
+          mkdir -p dist/macos-arm64 dist/macos-x86_64
+          tar -C dist/macos-arm64 -xzf apptars/cr2xt-app-arm64.tar.gz
+          tar -C dist/macos-x86_64 -xzf apptars/cr2xt-app-x86_64.tar.gz
+
+      - name: Merge to universal and create DMGs
+        run: ./scripts/build-dist-macos.sh --merge-only -H
+
+      - name: Verify universal binary
+        run: |
+          archs=$(lipo -archs dist/macos-universal/cr2xt.app/Contents/MacOS/crqt)
+          echo "Architectures: $archs"
+          [[ "$archs" == *arm64* && "$archs" == *x86_64* ]]
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmgs
+          path: dist/*.dmg
+          if-no-files-found: error
