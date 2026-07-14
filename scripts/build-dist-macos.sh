@@ -19,8 +19,8 @@
 #   -a, --arch ARCH      Target architecture(s) (default: native, or "arm64;x86_64" for universal)
 #   -m, --macos-target V Minimum macOS version (default: from dist-config-macos.json)
 #   -H, --headless       Force headless DMG creation (skip Finder prettifying)
+#   -M, --merge-only     Merge existing dist/macos-{arm64,x86_64} bundles into universal + DMGs (no build)
 #   -h, --help           Show this help message
-
 
 set -euo pipefail
 
@@ -49,11 +49,12 @@ BUILD_ALL=false
 TARGET_ARCH=""
 MACOS_TARGET=""  # Will be set from config or command line
 HEADLESS=false   # Force headless DMG creation
+MERGE_ONLY=false # Merge existing per-arch bundles, no build
 
 # === Functions ===
 
 print_help() {
-    head -22 "$0" | grep '^#' | sed 's/^# \?//'
+    head -23 "$0" | grep '^#' | sed 's/^# \?//'
 }
 
 log_info() {
@@ -334,6 +335,12 @@ while [[ $# -gt 0 ]]; do
             ;;
         -H|--headless)
             HEADLESS=true
+            shift
+            ;;
+        -M|--merge-only)
+            MERGE_ONLY=true
+            BUILD=false
+            UNIVERSAL=true
             shift
             ;;
         -h|--help)
@@ -998,7 +1005,44 @@ build_and_deploy_arch() {
 }
 
 # === Build ===
-if $BUILD; then
+if $MERGE_ONLY; then
+    ARM64_APP="${PROJECT_ROOT}/dist/macos-arm64/${APP_NAME}.app"
+    X86_64_APP="${PROJECT_ROOT}/dist/macos-x86_64/${APP_NAME}.app"
+
+    for required in "${ARM64_APP}/Contents/MacOS/crqt" "${X86_64_APP}/Contents/MacOS/crqt"; do
+        if [ ! -f "$required" ]; then
+            log_error "merge-only: missing per-arch bundle binary: $required"
+            exit 1
+        fi
+    done
+
+    echo ""
+    log_info "Merging per-arch bundles into Universal Binary (merge-only)"
+
+    rm -rf "${APP_BUNDLE}"
+    mkdir -p "$(dirname "${APP_BUNDLE}")"
+    ditto "${ARM64_APP}" "${APP_BUNDLE}"
+
+    lipo_combine \
+        "${ARM64_APP}/Contents/MacOS/crqt" \
+        "${X86_64_APP}/Contents/MacOS/crqt" \
+        "${APP_BUNDLE}/Contents/MacOS/crqt"
+
+    ARM64_CRENGINE="${ARM64_APP}/Contents/Frameworks/crengine-ng.framework/Versions/A/crengine-ng"
+    X86_64_CRENGINE="${X86_64_APP}/Contents/Frameworks/crengine-ng.framework/Versions/A/crengine-ng"
+    BUNDLE_CRENGINE="${APP_BUNDLE}/Contents/Frameworks/crengine-ng.framework/Versions/A/crengine-ng"
+    if [ -f "$ARM64_CRENGINE" ] && [ -f "$X86_64_CRENGINE" ]; then
+        lipo_combine "$ARM64_CRENGINE" "$X86_64_CRENGINE" "$BUNDLE_CRENGINE"
+    fi
+
+    create_universal_frameworks "${ARM64_APP}" "${X86_64_APP}" "${APP_BUNDLE}"
+    apply_framework_exclusions "${APP_BUNDLE}"
+    log_success "Universal Binary created"
+
+    # Fall through to the shared resource/sign/DMG flow for all three bundles
+    BUILD_ALL=true
+    SKIP_DEPLOY=true
+elif $BUILD; then
     echo ""
 
     if $IS_UNIVERSAL; then
