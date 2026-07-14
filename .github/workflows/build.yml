@@ -176,9 +176,10 @@ jobs:
 
       - name: Install dependencies (Homebrew)
         if: startsWith(matrix.runner, 'macos-')
-        run: >-
-          brew install ninja ccache qt@6 freetype harfbuzz libpng jpeg-turbo webp
-          fribidi zstd utf8proc libunibreak jpeg-xl fontconfig dbus
+        run: |
+          brew untap aws/tap 2>/dev/null || true
+          brew install ninja ccache qt@6 freetype harfbuzz libpng jpeg-turbo webp \
+            fribidi zstd utf8proc libunibreak jpeg-xl fontconfig dbus
 
       - name: Cache ccache
         if: startsWith(matrix.runner, 'macos-')
