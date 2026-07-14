@@ -105,7 +105,10 @@ jobs:
             libfreetype-dev libharfbuzz-dev libpng-dev libjpeg-turbo8-dev \
             libwebp-dev libfribidi-dev libzstd-dev libutf8proc-dev libunibreak-dev \
             libfontconfig1-dev zlib1g-dev libgl1-mesa-dev libxkbcommon-dev \
-            libfuse2 libxcb-cursor0
+            libfuse2 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
+            libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+            libxcb-shape0 libxcb-sync1 libxcb-xfixes0 libxcb-xinerama0 \
+            libxcb-xkb1 libxcb-glx0 libxcb-util1
 
       - name: Cache Qt
         uses: actions/cache@v6
