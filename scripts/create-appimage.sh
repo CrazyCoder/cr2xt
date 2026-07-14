@@ -21,6 +21,7 @@ CLEAN_SRC=0
 CLEAN_APPDIR=0
 SKIP_BUILD=0
 NO_SYNC=0
+SRC_OVERRIDE=""
 JOBS=$(nproc)
 
 print_usage() {
@@ -32,6 +33,7 @@ print_usage() {
     echo "  --clean-appdir  Only remove AppDir (keeps build, useful for re-packaging)"
     echo "  --skip-build    Skip build step, only create AppImage from existing build"
     echo "  --no-sync       Skip git sync (keeps local source modifications)"
+    echo "  --src DIR       Use existing source checkout (skips clone/sync)"
     echo "  -j N            Number of parallel jobs (default: $(nproc))"
     echo "  --qt VERSION    Qt version to use (default: $QT_VERSION)"
     echo "  -h, --help      Show this help"
@@ -86,6 +88,10 @@ while [[ $# -gt 0 ]]; do
             NO_SYNC=1
             shift
             ;;
+        --src)
+            SRC_OVERRIDE="$2"
+            shift 2
+            ;;
         -j)
             JOBS="$2"
             shift 2
@@ -106,6 +112,17 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Apply source override (CI: build from existing checkout, no git operations)
+if [ -n "$SRC_OVERRIDE" ]; then
+    SRC="$(cd "$SRC_OVERRIDE" && pwd)"
+    NO_SYNC=1
+fi
+
+# Prefer fonts committed in the source tree over build-root fonts
+if [ -d "$SRC/fonts" ]; then
+    FONTS_DIR="$SRC/fonts"
+fi
 
 echo "=== cr2xt AppImage Builder ==="
 echo "Qt version: $QT_VERSION"
@@ -182,8 +199,8 @@ fi
 mkdir -p "$BUILD" "$APPDIR"
 
 if [ "$SKIP_BUILD" -eq 0 ]; then
-    # Step 1 - Get sources (only if not present)
-    if [ ! -d "$SRC/.git" ]; then
+    # Step 1 - Get sources (only if not present; never clone over a --src checkout)
+    if [ -z "$SRC_OVERRIDE" ] && [ ! -d "$SRC/.git" ]; then
         echo "=== Cloning sources ==="
         rm -rf "$SRC"
         git clone --recursive https://github.com/CrazyCoder/cr2xt.git "$SRC"
