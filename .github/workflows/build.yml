@@ -75,6 +75,7 @@ jobs:
         run: |
           $msysRoot = if (Test-Path 'C:\ci-msys2\msys64') { 'C:\ci-msys2\msys64' } else { 'C:\tools\msys64' }
           $src = Join-Path $env:RUNNER_TEMP 'cr-conv'
+          New-Item -ItemType Directory -Force $src | Out-Null
           .\scripts\build-dist-windows.ps1 -Build -Msys2Root $msysRoot -SourceDir $src
 
       - uses: actions/upload-artifact@v4
@@ -140,6 +141,12 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Add Homebrew and local bins to PATH (self-hosted runners have a minimal PATH)
+        run: |
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+          echo "/usr/local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Install dependencies (Homebrew)
         if: startsWith(matrix.runner, 'macos-')
         run: >-
@@ -164,10 +171,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Add Homebrew and local bins to PATH (self-hosted runners have a minimal PATH)
+        run: |
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+          echo "/usr/local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Install dmgbuild
         run: |
+          export PATH="$HOME/.local/bin:$PATH"
           command -v dmgbuild >/dev/null 2>&1 || pipx install dmgbuild
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - uses: actions/download-artifact@v4
         with:
