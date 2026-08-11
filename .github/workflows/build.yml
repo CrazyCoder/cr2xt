@@ -76,6 +76,7 @@ jobs:
             mingw-w64-x86_64-libunibreak
             mingw-w64-x86_64-libjxl
             mingw-w64-x86_64-fontconfig
+            mingw-w64-x86_64-gettext-runtime
             mingw-w64-x86_64-zlib
 
       - name: Cache ccache
@@ -133,6 +134,28 @@ jobs:
           ./configure --prefix=/usr/local >/dev/null
           make -j"$(nproc)" >/dev/null
           sudo make install >/dev/null
+          sudo ldconfig
+
+      - name: Build libjxl from source
+        run: |
+          rm -rf "$RUNNER_TEMP/libjxl"
+          git clone --branch v0.7.0 --depth 1 --recursive --shallow-submodules \
+            https://github.com/libjxl/libjxl.git "$RUNNER_TEMP/libjxl"
+          cmake -S "$RUNNER_TEMP/libjxl" -B "$RUNNER_TEMP/libjxl/build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DBUILD_TESTING=OFF \
+            -DJPEGXL_ENABLE_TOOLS=OFF \
+            -DJPEGXL_ENABLE_DOXYGEN=OFF \
+            -DJPEGXL_ENABLE_MANPAGES=OFF \
+            -DJPEGXL_ENABLE_BENCHMARK=OFF \
+            -DJPEGXL_ENABLE_EXAMPLES=OFF \
+            -DJPEGXL_ENABLE_JNI=OFF \
+            -DJPEGXL_ENABLE_SJPEG=OFF \
+            -DJPEGXL_ENABLE_OPENEXR=OFF \
+            -DJPEGXL_ENABLE_PLUGINS=OFF
+          cmake --build "$RUNNER_TEMP/libjxl/build" -j"$(nproc)"
+          sudo cmake --install "$RUNNER_TEMP/libjxl/build"
           sudo ldconfig
 
       - name: Cache Qt
